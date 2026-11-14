@@ -93,7 +93,7 @@ CRYPTO_NETWORKS = {
     "btc": {"name": "Bitcoin (BTC)", "address": "bc1qj7xy0645vcza7l3et5s8nuahllua9a439c0795", "network": "Bitcoin"},
 }
 
-# === ФУНКЦИЯ ЧЕРЕДОВАНИЯ РЕКВИЗИТОВ (ИСПРАВЛЕНАЯ) ===
+# === ФУНКЦИЯ ЧЕРЕДОВАНИЯ РЕКВИЗИТОВ ===
 def get_next_card(country: str):
   now = datetime.datetime.now()
   active = []
@@ -133,7 +133,7 @@ async def get_exchange_rate(target_currency: str) -> float:
   fallback_rates = {"RUB": 95.0, "BYN": 3.3, "KZT": 480.0, "UAH": 41.5}
   return fallback_rates.get(target_currency, 1.0)
 
-# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ БАННЕРОВ (С АВТОПОИСКОМ .JPG / .JPEG / .PNG) ===
+# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ БАННЕРОВ (ИСПРАВЛЕНАЯ И СТАБИЛЬНАЯ) ===
 async def show_banner_step(event: Message | CallbackQuery, banner_name: str, text: str, reply_markup: InlineKeyboardMarkup):
   base_name = os.path.splitext(banner_name)[0]
   banner_path = None
@@ -148,24 +148,30 @@ async def show_banner_step(event: Message | CallbackQuery, banner_name: str, tex
   photo = FSInputFile(banner_path) if banner_path and os.path.exists(banner_path) else None
 
   if isinstance(event, CallbackQuery):
+    await event.answer()
     if photo:
-      try:
-        await event.message.edit_media(
-            media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
-            reply_markup=reply_markup
-        )
-      except Exception:
+      # Если предыдущее сообщение было с фото, плавно меняем через edit_media
+      if event.message.photo:
         try:
-          await event.message.delete()
+          await event.message.edit_media(
+              media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
+              reply_markup=reply_markup
+          )
+          return
         except Exception:
           pass
-        await event.message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode="HTML")
+      
+      # Если предыдущее сообщение было текстовым (например, экран карт), удаляем его и шлем фото
+      try:
+        await event.message.delete()
+      except Exception:
+        pass
+      await event.message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode="HTML")
     else:
       try:
         await event.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
       except Exception:
         await event.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
-    await event.answer()
   else:
     if photo:
       await event.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode="HTML")
