@@ -93,13 +93,13 @@ CRYPTO_NETWORKS = {
     "btc": {"name": "Bitcoin (BTC)", "address": "bc1qj7xy0645vcza7l3et5s8nuahllua9a439c0795", "network": "Bitcoin"},
 }
 
-# === ФУНКЦИЯ ЧЕРЕДОВАНИЯ РЕКВИЗИТОВ ===
+# === ФУНКЦИЯ ЧЕРЕДОВАНИЯ РЕКВИЗИТОВ (ИСПРАВЛЕНАЯ) ===
 def get_next_card(country: str):
   now = datetime.datetime.now()
   active = []
   for card in CARD_DETAILS:
     if card["country"].lower() == country.lower():
-      if card["frozen_until"] and card["frozen_until"] > num_check := now: # type: ignore
+      if card["frozen_until"] and card["frozen_until"] > now:
         continue
       elif card["frozen_until"] and card["frozen_until"] <= now:
         card["frozen_until"] = None
@@ -133,11 +133,19 @@ async def get_exchange_rate(target_currency: str) -> float:
   fallback_rates = {"RUB": 95.0, "BYN": 3.3, "KZT": 480.0, "UAH": 41.5}
   return fallback_rates.get(target_currency, 1.0)
 
-# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ БАННЕРОВ И КРАСНО-БЕЛОГО ИНТЕРФЕЙСА ===
+# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ БАННЕРОВ (С АВТОПОИСКОМ .JPG / .JPEG / .PNG) ===
 async def show_banner_step(event: Message | CallbackQuery, banner_name: str, text: str, reply_markup: InlineKeyboardMarkup):
-  banner_path = os.path.join("banners", banner_name)
-  # Если картинка еще не загружена в папку banners, бот автоматически подстрахуется текстом, но с баннером будет брать файл
-  photo = FSInputFile(banner_path) if os.path.exists(banner_path) else None
+  base_name = os.path.splitext(banner_name)[0]
+  banner_path = None
+  
+  if os.path.exists("banners"):
+    for filename in os.listdir("banners"):
+      name_without_ext = os.path.splitext(filename)[0]
+      if name_without_ext.lower() == base_name.lower():
+        banner_path = os.path.join("banners", filename)
+        break
+
+  photo = FSInputFile(banner_path) if banner_path and os.path.exists(banner_path) else None
 
   if isinstance(event, CallbackQuery):
     if photo:
@@ -502,7 +510,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
-  await show_banner_step(callback, "main.jpg", text, keyboard)
+  await show_banner_step(message, "main.jpg", text, keyboard)
   await state.clear()
 
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
@@ -760,7 +768,6 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
       [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="ask_for_receipt", style="danger")],
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")]
   ])
-  # Важно: здесь мы оставляем обычный edit_text без смены баннера, чтобы реквизиты не дергались и текст копировался идеально
   try:
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
   except Exception:
