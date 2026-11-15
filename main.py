@@ -188,9 +188,9 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
         try:
           new_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
           await state.update_data(bot_msg_id=new_msg.message_id)
-          return
         except Exception:
           pass
+        return
     await state.update_data(bot_msg_id=msg.message_id)
   else:
     try:
@@ -234,12 +234,12 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
 
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🛒 Заказать", callback_data="start_order")],
+          [InlineKeyboardButton(text="🛒 Заказать", callback_data="start_order", style="danger")],
           [
-              InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders"),
-              InlineKeyboardButton(text="📊 Репутация", callback_data="reputation"),
+              InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders", style="primary"),
+              InlineKeyboardButton(text="📊 Репутация", callback_data="reputation", style="primary"),
           ],
-          [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin")],
+          [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin", style="danger")],
       ]
   )
   text = (
@@ -390,8 +390,8 @@ async def scheduled_broadcast(bot: Bot):
               "Ждем вас в боте 👇"
           )
           keyboard = InlineKeyboardMarkup(inline_keyboard=[
-              [InlineKeyboardButton(text="✨ Оформить со скидкой", callback_data="start_order")],
-              [InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]
+              [InlineKeyboardButton(text="✨ Оформить со скидкой", callback_data="start_order", style="danger")],
+              [InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="primary")]
           ])
           
           if banner_path and os.path.exists(banner_path):
@@ -410,8 +410,8 @@ async def delayed_abandoned_cart_reminder(bot: Bot, user_id: int):
     if user_id in ABANDONED_CHECKOUTS:
       reminder_text = "👋 <b>Завершить заказ со скидкой -20%?</b>\n\nВы остановились на этапе оплаты. Возвращайтесь к оформлению 👇"
       keyboard = InlineKeyboardMarkup(inline_keyboard=[
-          [InlineKeyboardButton(text="🛒 Вернуться к заказу", callback_data="start_order")],
-          [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin")]
+          [InlineKeyboardButton(text="🛒 Вернуться к заказу", callback_data="start_order", style="danger")],
+          [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin", style="danger")]
       ])
       
       banner_path = get_banner_path("abandoned_cart.jpg")
@@ -438,15 +438,15 @@ async def cmd_order(message: Message, state: FSMContext):
   await state.set_state(OrderForm.service)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🟢 Облить зеленкой — 20$", callback_data="srv_Облить_зеленкой_20")],
-          [InlineKeyboardButton(text="🔥 Поджёг двери — 50$", callback_data="srv_Поджег_дверей_50")],
-          [InlineKeyboardButton(text="🥊 Избить — 80$", callback_data="srv_Избить_80")],
-          [InlineKeyboardButton(text="🦴 Сломать пальцы — 100$", callback_data="srv_Сломать_пальцы_100")],
-          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200")],
-          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300")],
-          [InlineKeyboardButton(text="♿ Сделать инвалидом — 500$", callback_data="srv_Сделать_инвалидом_500")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 3000$", callback_data="srv_Убийство_3000")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")],
+          [InlineKeyboardButton(text="🟢 Облить зеленкой — 20$", callback_data="srv_Облить_зеленкой_20", style="primary")],
+          [InlineKeyboardButton(text="🔥 Поджёг двери — 50$", callback_data="srv_Поджег_дверей_50", style="danger")],
+          [InlineKeyboardButton(text="🥊 Избить — 80$", callback_data="srv_Избить_80", style="primary")],
+          [InlineKeyboardButton(text="🦴 Сломать пальцы — 100$", callback_data="srv_Сломать_пальцы_100", style="danger")],
+          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200", style="primary")],
+          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300", style="danger")],
+          [InlineKeyboardButton(text="♿ Сделать инвалидом — 500$", callback_data="srv_Сделать_инвалидом_500", style="primary")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 3000$", callback_data="srv_Убийство_3000", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
   text = "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
@@ -462,7 +462,7 @@ async def cmd_my_orders_msg(message: Message, state: FSMContext):
     text = "📦 <b>История ваших заказов:</b>\n\n"
     for idx, ord_data in enumerate(orders, 1):
       text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {ord_data['total_price']}$\n• Статус: {ord_data['status']}\n\n"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(message, state, "my_orders.jpg", text, keyboard)
 
 @router.message(Command("reputation"))
@@ -475,7 +475,7 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
       f"• Новых заявок сегодня: <b>{new_requests}</b>\n\n"
       "<i>Конфиденциальность и безопасность гарантированы.</i>"
   )
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(message, state, "reputation.jpg", text, keyboard)
 
 @router.callback_query(F.data == "back_home")
@@ -496,7 +496,7 @@ async def show_reputation(callback: CallbackQuery, state: FSMContext):
       f"• Новых заявок сегодня: <b>{new_requests}</b>\n\n"
       "<i>Конфиденциальность и безопасность гарантированы.</i>"
   )
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(callback, state, "reputation.jpg", text, keyboard)
 
 @router.callback_query(F.data == "my_orders")
@@ -509,13 +509,13 @@ async def show_my_orders(callback: CallbackQuery, state: FSMContext):
     text = "📦 <b>История ваших заказов:</b>\n\n"
     for idx, ord_data in enumerate(orders, 1):
       text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {ord_data['total_price']}$\n• Статус: {ord_data['status']}\n\n"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(callback, state, "my_orders.jpg", text, keyboard)
 
 @router.callback_query(F.data == "contact_admin")
 async def contact_admin_info(callback: CallbackQuery, state: FSMContext):
   await state.set_state(SupportForm.reason)
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_home", style="danger")]])
   text = (
       "💬 <b>Служба поддержки</b>\n\n"
       "Опишите вашу ситуацию или задайте вопрос (оплата, статус заказа и т.д.):"
@@ -527,15 +527,11 @@ async def process_support_reason(message: Message, state: FSMContext):
   await state.update_data(reason=message.text.strip())
   await state.set_state(SupportForm.photo)
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="⏩ Пропустить", callback_data="skip_support_photo")],
-      [InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_home")]
+      [InlineKeyboardButton(text="⏩ Пропустить", callback_data="skip_support_photo", style="primary")],
+      [InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_home", style="danger")]
   ])
   text = "📸 Отправьте фото при необходимости или нажмите пропустить:"
   await render_step(message, state, "support.jpg", text, keyboard)
-
-@router.message(SupportForm.reason, ~F.text)
-async def fallback_supp_reason(message: Message):
-  await message.reply("⚠️ Пожалуйста, опишите ваш вопрос текстовым сообщением.")
 
 @router.message(SupportForm.photo, F.photo)
 async def process_support_photo(message: Message, state: FSMContext):
@@ -550,13 +546,9 @@ async def process_support_photo(message: Message, state: FSMContext):
     except Exception:
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
   await render_step(message, state, "main.jpg", text, keyboard)
   await state.clear()
-
-@router.message(SupportForm.photo, ~F.photo)
-async def fallback_supp_photo(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте фото или нажмите «Пропустить».")
 
 @router.callback_query(SupportForm.photo, F.data == "skip_support_photo")
 async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
@@ -570,7 +562,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
     except Exception:
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
   await render_step(callback, state, "main.jpg", text, keyboard)
   await state.clear()
 
@@ -585,15 +577,15 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
   await state.set_state(OrderForm.service)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🟢 Облить зеленкой — 20$", callback_data="srv_Облить_зеленкой_20")],
-          [InlineKeyboardButton(text="🔥 Поджёг двери — 50$", callback_data="srv_Поджег_дверей_50")],
-          [InlineKeyboardButton(text="🥊 Избить — 80$", callback_data="srv_Избить_80")],
-          [InlineKeyboardButton(text="🦴 Сломать пальцы — 100$", callback_data="srv_Сломать_пальцы_100")],
-          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200")],
-          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300")],
-          [InlineKeyboardButton(text="♿ Сделать инвалидом — 500$", callback_data="srv_Сделать_инвалидом_500")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 3000$", callback_data="srv_Убийство_3000")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")],
+          [InlineKeyboardButton(text="🟢 Облить зеленкой — 20$", callback_data="srv_Облить_зеленкой_20", style="primary")],
+          [InlineKeyboardButton(text="🔥 Поджёг двери — 50$", callback_data="srv_Поджег_дверей_50", style="danger")],
+          [InlineKeyboardButton(text="🥊 Избить — 80$", callback_data="srv_Избить_80", style="primary")],
+          [InlineKeyboardButton(text="🦴 Сломать пальцы — 100$", callback_data="srv_Сломать_пальцы_100", style="danger")],
+          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200", style="primary")],
+          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300", style="danger")],
+          [InlineKeyboardButton(text="♿ Сделать инвалидом — 500$", callback_data="srv_Сделать_инвалидом_500", style="primary")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 3000$", callback_data="srv_Убийство_3000", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
   text = "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
@@ -616,11 +608,11 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
   ]
   kb_rows = []
   for i in range(0, len(countries), 2):
-    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1])]
+    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1], style="primary")]
     if i + 1 < len(countries):
-      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1]))
+      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1], style="danger"))
     kb_rows.append(row)
-  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")])
+  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")])
 
   text = f"🎯 Выбрано: <b>{service_name}</b> ({price}$)\n\n🌍 <b>Страна вашей цели</b>\n\nВыберите страну из списка:"
   await render_step(callback, state, "country.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -634,7 +626,7 @@ async def process_country(callback: CallbackQuery, state: FSMContext):
   await state.update_data(country=selected, curr_code=curr_info["code"], curr_symbol=curr_info["symbol"])
 
   await state.set_state(OrderForm.target_location)
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
   text = (
       f"📍 Страна: <b>{selected}</b>\n\n"
       f"🏢 <b>Локация цели</b>\n"
@@ -646,31 +638,23 @@ async def process_country(callback: CallbackQuery, state: FSMContext):
 async def process_target_location(message: Message, state: FSMContext):
   await state.update_data(target_location=message.text.strip())
   await state.set_state(OrderForm.target_data)
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
   text = (
       "🪪 <b>Данные цели</b>\n\n"
       "Укажите ФИО или другую информацию о цели (если неизвестно, напишите «неизвестно»):"
   )
   await render_step(message, state, "target_data.jpg", text, keyboard)
 
-@router.message(OrderForm.target_location, ~F.text)
-async def fallback_order_target_location(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с локацией цели.")
-
 @router.message(OrderForm.target_data, F.text)
 async def process_target_data(message: Message, state: FSMContext):
   await state.update_data(target_data=message.text.strip(), photos=[])
   await state.set_state(OrderForm.photos)
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="⏩ Пропустить", callback_data="finish_photos")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]
+      [InlineKeyboardButton(text="⏩ Пропустить", callback_data="finish_photos", style="primary")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = "📸 Прикрепите фото цели (до 3 шт.) или нажмите кнопку пропуска:"
   await render_step(message, state, "photos.jpg", text, keyboard)
-
-@router.message(OrderForm.target_data, ~F.text)
-async def fallback_order_target_data(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с данными цели.")
 
 @router.message(OrderForm.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
@@ -683,25 +667,21 @@ async def process_photo(message: Message, state: FSMContext):
   photos.append(message.photo[-1].file_id)
   await state.update_data(photos=photos)
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text=f"✅ Готово ({len(photos)}/3)", callback_data="finish_photos")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]
+      [InlineKeyboardButton(text=f"✅ Готово ({len(photos)}/3)", callback_data="finish_photos", style="primary")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = f"📸 Фото #{len(photos)} успешно добавлено. Можете прикрепить еще или завершить:"
   await render_step(message, state, "photos.jpg", text, keyboard)
-
-@router.message(OrderForm.photos, ~F.photo)
-async def fallback_order_photos(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте фото цели или нажмите кнопку под сообщением.")
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
   await state.set_state(OrderForm.urgency)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="⚡ За 2-3 часа (+50$)", callback_data="urg_fast_50")],
-          [InlineKeyboardButton(text="🕐 Завтра (+20$)", callback_data="urg_tomorrow_20")],
-          [InlineKeyboardButton(text="📅 Стандартно (2-5 дней)", callback_data="urg_standard_0")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")],
+          [InlineKeyboardButton(text="⚡ За 2-3 часа (+50$)", callback_data="urg_fast_50", style="primary")],
+          [InlineKeyboardButton(text="🕐 Завтра (+20$)", callback_data="urg_tomorrow_20", style="danger")],
+          [InlineKeyboardButton(text="📅 Стандартно (2-5 дней)", callback_data="urg_standard_0", style="primary")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")],
       ]
   )
   text = "⏱ <b>Срочность выполнения</b>\n\nВыберите желаемый вариант:"
@@ -731,8 +711,8 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
       f"💵 <b>Сумма к оплате: {total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]
+      [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment", style="danger")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]
   ])
   await render_step(callback, state, "summary.jpg", summary_text, keyboard)
 
@@ -763,10 +743,10 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤖 CryptoBot (без комиссии)", callback_data="pay_cryptobot")],
-            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert")],
-            [InlineKeyboardButton(text="💬 Нужна помощь", callback_data="payment_help_manager")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]
+            [InlineKeyboardButton(text="🤖 CryptoBot (без комиссии)", callback_data="pay_cryptobot", style="danger")],
+            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert", style="primary")],
+            [InlineKeyboardButton(text="💬 Нужна помощь", callback_data="payment_help_manager", style="danger")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]
         ]
     )
   else:
@@ -786,11 +766,11 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=card_btn_text, callback_data="pay_card_option")],
-            [InlineKeyboardButton(text="🤖 CryptoBot (без комиссии)", callback_data="pay_cryptobot")],
-            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert")],
-            [InlineKeyboardButton(text="💬 Нужна помощь", callback_data="payment_help_manager")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order")]
+            [InlineKeyboardButton(text=card_btn_text, callback_data="pay_card_option", style="danger")],
+            [InlineKeyboardButton(text="🤖 CryptoBot (без комиссии)", callback_data="pay_cryptobot", style="primary")],
+            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert", style="danger")],
+            [InlineKeyboardButton(text="💬 Нужна помощь", callback_data="payment_help_manager", style="primary")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
         ]
     )
 
@@ -812,9 +792,9 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="pay_cryptobot")],
-            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")]
+            [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="pay_cryptobot", style="danger")],
+            [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="crypto_expert", style="primary")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment", style="primary")]
         ]
     )
     await render_step(callback, state, "payment.jpg", text, keyboard)
@@ -837,8 +817,8 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
       "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="ask_for_receipt")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")]
+      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="ask_for_receipt", style="danger")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment", style="primary")]
   ])
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
@@ -865,9 +845,9 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
   await state.update_data(invoice_id=inv_id)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🔗 Оплатить счет", url=pay_url)],
-          [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="cryptobot_check_success")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")],
+          [InlineKeyboardButton(text="🔗 Оплатить счет", url=pay_url, style="primary")],
+          [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="cryptobot_check_success", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment", style="primary")],
       ]
   )
   text = f"🤖 <b>CryptoBot</b>\n\nСумма: <b>{total_price} USDT</b>\n\nПосле оплаты нажмите кнопку проверки:"
@@ -899,7 +879,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
       pass
 
   text = "✅ <b>Оплата подтверждена!</b>\n\nВаша заявка принята в работу."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
   await render_step(callback, state, "main.jpg", text, keyboard)
   await state.clear()
 
@@ -907,11 +887,11 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="💎 USDT (TRC-20)", callback_data="pay_crypto_trc20")],
-          [InlineKeyboardButton(text="💵 USDT (BEP-20)", callback_data="pay_crypto_bep20")],
-          [InlineKeyboardButton(text="🪙 TON", callback_data="pay_crypto_ton")],
-          [InlineKeyboardButton(text="🪙 Bitcoin (BTC)", callback_data="pay_crypto_btc")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")],
+          [InlineKeyboardButton(text="💎 USDT (TRC-20)", callback_data="pay_crypto_trc20", style="primary")],
+          [InlineKeyboardButton(text="💵 USDT (BEP-20)", callback_data="pay_crypto_bep20", style="danger")],
+          [InlineKeyboardButton(text="🪙 TON", callback_data="pay_crypto_ton", style="primary")],
+          [InlineKeyboardButton(text="🪙 Bitcoin (BTC)", callback_data="pay_crypto_btc", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment", style="primary")],
       ]
   )
   text = "🪙 Выберите криптовалютную сеть для перевода:"
@@ -938,15 +918,15 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
       "💡 <i>После перевода прикрепите чек.</i>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="ask_for_receipt")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="crypto_expert")]
+      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="ask_for_receipt", style="danger")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="crypto_expert", style="primary")]
   ])
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
   await state.set_state(OrderForm.receipt)
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="go_to_payment", style="primary")]])
   text = "🧾 Отправьте скриншот или фото чека следующим сообщением:"
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
@@ -969,13 +949,9 @@ async def process_receipt_photo(message: Message, state: FSMContext):
       pass
 
   text = "✅ Чек получен! Менеджер проверит платеж в течение 25 минут."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
   await render_step(message, state, "main.jpg", text, keyboard)
   await state.clear()
-
-@router.message(OrderForm.receipt, ~F.photo)
-async def fallback_order_receipt(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте скриншот или фото чека.")
 
 # === ВАКАНСИИ ===
 @router.callback_query(F.data == "start_vacancy")
@@ -990,11 +966,11 @@ async def process_start_vacancy(callback: CallbackQuery, state: FSMContext):
   ]
   kb_rows = []
   for i in range(0, len(countries), 2):
-    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1])]
+    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1], style="primary")]
     if i + 1 < len(countries):
-      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1]))
+      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1], style="danger"))
     kb_rows.append(row)
-  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")])
+  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")])
 
   text = "💼 <b>Анкета кандидата</b>\n\nВыберите вашу страну:"
   await render_step(callback, state, "catalog.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -1009,7 +985,7 @@ async def process_vacancy_country(callback: CallbackQuery, state: FSMContext):
 
   await state.set_state(VacancyForm.city_name_age)
   text = f"🌍 Страна: <b>{selected}</b>\n\nУкажите город, ваше имя и возраст одним сообщением:"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy", style="primary")]])
   await render_step(callback, state, "catalog.jpg", text, keyboard)
 
 @router.message(VacancyForm.city_name_age, F.text)
@@ -1017,36 +993,24 @@ async def process_vacancy_city_name_age(message: Message, state: FSMContext):
   await state.update_data(city_name_age=message.text.strip())
   await state.set_state(VacancyForm.parameters)
   text = "📏 Укажите ваши физические параметры (рост, вес):"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy")]])
-  await render_step(message, state, "catalog.jpg", text, keyboard)
-
-@router.message(VacancyForm.city_name_age, ~F.text)
-async def fallback_vac_city(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение (город, имя, возраст).")
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy", style="primary")]])
+  await render_step(callback, state, "catalog.jpg", text, keyboard)
 
 @router.message(VacancyForm.parameters, F.text)
 async def process_vacancy_parameters(message: Message, state: FSMContext):
   await state.update_data(parameters=message.text.strip())
   await state.set_state(VacancyForm.sports_exp)
   text = "🏅 Расскажите о вашем спортивном опыте:"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy")]])
-  await render_step(message, state, "catalog.jpg", text, keyboard)
-
-@router.message(VacancyForm.parameters, ~F.text)
-async def fallback_vac_params(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с вашими параметрами.")
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy", style="primary")]])
+  await render_step(callback, state, "catalog.jpg", text, keyboard)
 
 @router.message(VacancyForm.sports_exp, F.text)
 async def process_vacancy_sports_exp(message: Message, state: FSMContext):
   await state.update_data(sports_exp=message.text.strip())
   await state.set_state(VacancyForm.photo)
   text = "📸 Прикрепите фото физической формы:"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy")]])
-  await render_step(message, state, "catalog.jpg", text, keyboard)
-
-@router.message(VacancyForm.sports_exp, ~F.text)
-async def fallback_vac_exp(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение о спортивном опыте.")
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_vacancy", style="primary")]])
+  await render_step(callback, state, "catalog.jpg", text, keyboard)
 
 @router.message(VacancyForm.photo, F.photo)
 async def process_vacancy_photo(message: Message, state: FSMContext):
@@ -1062,16 +1026,12 @@ async def process_vacancy_photo(message: Message, state: FSMContext):
   )
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="vpay_cryptobot")],
-          [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="vpay_crypto_expert")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]
+          [InlineKeyboardButton(text="🤖 CryptoBot", callback_data="vpay_cryptobot", style="danger")],
+          [InlineKeyboardButton(text="🪙 Криптовалюта", callback_data="vpay_crypto_expert", style="primary")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="danger")]
       ]
   )
   await render_step(message, state, "payment.jpg", text, keyboard)
-
-@router.message(VacancyForm.photo, ~F.photo)
-async def fallback_vac_photo(message: Message):
-  await message.reply("⚠️ Пожалуйста, прикрепите фото физической формы.")
 
 @router.callback_query(F.data == "vpay_cryptobot")
 async def process_vpay_cryptobot(callback: CallbackQuery, state: FSMContext):
@@ -1083,9 +1043,9 @@ async def process_vpay_cryptobot(callback: CallbackQuery, state: FSMContext):
   await state.update_data(v_invoice_id=inv_id)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🔗 Оплатить счет", url=pay_url)],
-          [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="vpay_check_success")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")],
+          [InlineKeyboardButton(text="🔗 Оплатить счет", url=pay_url, style="primary")],
+          [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="vpay_check_success", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
   text = "🤖 <b>CryptoBot</b>\n\nСумма залога: <b>100 USDT</b>"
@@ -1105,19 +1065,19 @@ async def process_vpay_check(callback: CallbackQuery, state: FSMContext):
       pass
 
   text = "✅ Залог подтвержден! Анкета передана руководству."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
-  await render_step(callback, state, "main.jpg", text, keyboard)
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
+  await render_step(callback.message, state, "main.jpg", text, keyboard)
   await state.clear()
 
 @router.callback_query(F.data == "vpay_crypto_expert")
 async def process_vpay_crypto_expert(callback: CallbackQuery, state: FSMContext):
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="💎 USDT (TRC-20)", callback_data="vpay_crypto_trc20")],
-          [InlineKeyboardButton(text="💵 USDT (BEP-20)", callback_data="vpay_crypto_bep20")],
-          [InlineKeyboardButton(text="🪙 TON", callback_data="vpay_crypto_ton")],
-          [InlineKeyboardButton(text="🪙 Bitcoin (BTC)", callback_data="vpay_crypto_btc")],
-          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")],
+          [InlineKeyboardButton(text="💎 USDT (TRC-20)", callback_data="vpay_crypto_trc20", style="primary")],
+          [InlineKeyboardButton(text="💵 USDT (BEP-20)", callback_data="vpay_crypto_bep20", style="danger")],
+          [InlineKeyboardButton(text="🪙 TON", callback_data="vpay_crypto_ton", style="primary")],
+          [InlineKeyboardButton(text="🪙 Bitcoin (BTC)", callback_data="vpay_crypto_btc", style="danger")],
+          [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
   text = "🪙 Выберите сеть для залога:"
@@ -1139,8 +1099,8 @@ async def process_vpay_crypto(callback: CallbackQuery, state: FSMContext):
       "💡 <i>Прикрепите чек после перевода.</i>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="vacancy_ask_receipt")],
-      [InlineKeyboardButton(text="⬅️ Назад", callback_data="vpay_crypto_expert")]
+      [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="vacancy_ask_receipt", style="danger")],
+      [InlineKeyboardButton(text="⬅️ Назад", callback_data="vpay_crypto_expert", style="primary")]
   ])
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
@@ -1148,7 +1108,7 @@ async def process_vpay_crypto(callback: CallbackQuery, state: FSMContext):
 async def vacancy_ask_receipt(callback: CallbackQuery, state: FSMContext):
   await state.set_state(VacancyForm.receipt)
   text = "🧾 Отправьте чек о переводе гарантийного залога:"
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
 @router.message(VacancyForm.receipt, F.photo)
@@ -1161,13 +1121,56 @@ async def process_vacancy_receipt(message: Message, state: FSMContext):
       pass
 
   text = "✅ Чек принят! Руководство свяжется с вами."
-  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home")]])
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
   await render_step(message, state, "main.jpg", text, keyboard)
   await state.clear()
 
-@router.message(VacancyForm.receipt, ~F.photo)
-async def fallback_vac_receipt(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте чек о переводе залога.")
+
+# === ЗАЩИТНЫЕ (FALLBACK) ХЕНДЛЕРЫ ОТ ЗАВИСАНИЙ И НЕВЕРНОГО ВВОДА ===
+@router.message(OrderForm.target_location)
+async def fallback_order_location(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с локацией цели (город, адрес, дом или квартира).")
+
+@router.message(OrderForm.target_data)
+async def fallback_order_data(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с данными цели (ФИО или «неизвестно»).")
+
+@router.message(OrderForm.photos)
+async def fallback_order_photos(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте фото цели или нажмите кнопку «Готово» / «Пропустить».")
+
+@router.message(OrderForm.receipt)
+async def fallback_order_receipt(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте скриншот или фото чека об оплате.")
+
+@router.message(SupportForm.reason)
+async def fallback_support_reason(message: Message):
+  await message.reply("⚠️ Пожалуйста, опишите вашу ситуацию текстовым сообщением.")
+
+@router.message(SupportForm.photo)
+async def fallback_support_photo(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте фото или нажмите кнопку «Пропустить».")
+
+@router.message(VacancyForm.city_name_age)
+async def fallback_vacancy_city_name_age(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с городом, вашим именем и возрастом.")
+
+@router.message(VacancyForm.parameters)
+async def fallback_vacancy_parameters(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с физическими параметрами (рост, вес).")
+
+@router.message(VacancyForm.sports_exp)
+async def fallback_vacancy_sports_exp(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с описанием спортивного опыта.")
+
+@router.message(VacancyForm.photo)
+async def fallback_vacancy_photo(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте фото физической формы.")
+
+@router.message(VacancyForm.receipt)
+async def fallback_vacancy_receipt(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте фото чека об оплате залога.")
+
 
 # === WEB SERVER FOR RENDER / RAILWAY ===
 async def handle_ping(request):
