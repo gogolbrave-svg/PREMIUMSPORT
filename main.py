@@ -597,7 +597,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
-  await render_step(message, state, "main.jpg", text, keyboard)
+  await render_step(callback, state, "main.jpg", text, keyboard)
   await state.clear()
 
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
@@ -638,7 +638,7 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
     text = (
         "💸 <b>Вернуть долг</b>\n\n"
-        "Укажите какая сумма долга должника и детали:"
+        "Укажите информацию о долге: какая сумма долга, данные должника и т.д.:"
     )
     await render_step(callback, state, "catalog.jpg", text, keyboard)
   elif service_name == "Особый заказ":
@@ -678,8 +678,8 @@ async def process_debt_info(message: Message, state: FSMContext):
   await state.set_state(OrderForm.debt_wallet)
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
   text = (
-      "👛 <b>Реквизиты для получения</b>\n\n"
-      "Укажите ваш криптокошелек USDT / TON, чтобы получить назад деньги с должника:"
+      "💸 <b>Вернуть долг</b>\n\n"
+      "Теперь укажите свой криптокошелек <b>USDT (TRC-20 / BEP-20)</b> или <b>TON</b>, чтобы получить назад деньги с должника:"
   )
   await render_step(message, state, "catalog.jpg", text, keyboard)
 
@@ -723,7 +723,7 @@ async def process_target_location(message: Message, state: FSMContext):
       "🪪 <b>Данные цели</b>\n\n"
       "Укажите ФИО или другую информацию о цели (если неизвестно, напишите «неизвестно»):"
   )
-  await render_step(callback, state, "target_data.jpg", text, keyboard)
+  await render_step(message, state, "target_data.jpg", text, keyboard)
 
 @router.message(OrderForm.target_data, F.text)
 async def process_target_data(message: Message, state: FSMContext):
@@ -734,7 +734,7 @@ async def process_target_data(message: Message, state: FSMContext):
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = "📸 Прикрепите фото цели (до 3 шт.) или нажмите кнопку пропуска:"
-  await render_step(callback, state, "photos.jpg", text, keyboard)
+  await render_step(message, state, "photos.jpg", text, keyboard)
 
 @router.message(OrderForm.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
@@ -756,7 +756,7 @@ async def process_photo(message: Message, state: FSMContext):
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = f"📸 Фото #{len(photos)} успешно добавлено. Можете прикрепить еще или завершить:"
-  await render_step(callback, state, "photos.jpg", text, keyboard)
+  await render_step(message, state, "photos.jpg", text, keyboard)
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
@@ -1015,9 +1015,9 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
     try:
       extra_info = ""
       if data.get("debt_info"):
-        extra_info += f"\n• Долг / Детали: {data.get('debt_info')}"
+        extra_info += f"\n• Информация о долге: {data.get('debt_info')}"
       if data.get("debt_wallet"):
-        extra_info += f"\n• Кошелек для получения: {data.get('debt_wallet')}"
+        extra_info += f"\n• Кошелек для возврата (USDT/TON): {data.get('debt_wallet')}"
       if data.get("special_task"):
         extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
       await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}{extra_info}", parse_mode="HTML")
@@ -1096,9 +1096,9 @@ async def process_receipt_photo(message: Message, state: FSMContext):
     try:
       extra_info = ""
       if data.get("debt_info"):
-        extra_info += f"\n• Долг / Детали: {data.get('debt_info')}"
+        extra_info += f"\n• Информация о долге: {data.get('debt_info')}"
       if data.get("debt_wallet"):
-        extra_info += f"\n• Кошелек для получения: {data.get('debt_wallet')}"
+        extra_info += f"\n• Кошелек для возврата (USDT/TON): {data.get('debt_wallet')}"
       if data.get("special_task"):
         extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
       price_val = f"{data.get('total_price')}$" if data.get('total_price') > 0 else "Расчет менеджера"
