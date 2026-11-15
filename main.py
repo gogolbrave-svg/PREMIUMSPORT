@@ -149,7 +149,7 @@ def get_banner_path(banner_name: str):
         return os.path.join("banners", filename)
   return None
 
-# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЦЕЛЬНОГО ОБНОВЛЕНИЯ БАННЕРОВ (С КЕШИРОВАНИЕМ FILE_ID) ===
+# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЦЕЛЬНОГО ОБНОВЛЕНИЯ БАННЕРОВ (С ИСПРАВЛЕННЫМ FALLBACK) ===
 async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_name: str, text: str, reply_markup: InlineKeyboardMarkup):
   bot = event.bot
   chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
@@ -203,6 +203,7 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
     except Exception:
       pass
 
+    edited_successfully = False
     if bot_msg_id:
       try:
         if photo_source:
@@ -222,17 +223,18 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
               reply_markup=reply_markup,
               parse_mode="HTML"
           )
-        return
+        edited_successfully = True
       except Exception:
         pass
 
-    if photo_source:
-      new_msg = await bot.send_photo(chat_id=chat_id, photo=photo_source, caption=text, reply_markup=reply_markup, parse_mode="HTML")
-      if not banner_name in BANNER_CACHE and new_msg.photo:
-        BANNER_CACHE[banner_name] = new_msg.photo[-1].file_id
-    else:
-      new_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
-    await state.update_data(bot_msg_id=new_msg.message_id)
+    if not edited_successfully:
+      if photo_source:
+        new_msg = await bot.send_photo(chat_id=chat_id, photo=photo_source, caption=text, reply_markup=reply_markup, parse_mode="HTML")
+        if not banner_name in BANNER_CACHE and new_msg.photo:
+          BANNER_CACHE[banner_name] = new_msg.photo[-1].file_id
+      else:
+        new_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
+      await state.update_data(bot_msg_id=new_msg.message_id)
 
 # === ГЛАВНОЕ МЕНЮ ===
 async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
@@ -630,7 +632,6 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
 
   await state.update_data(service_name=service_name, service_price=price)
 
-  # Специфический шаг для "Вернуть долг"
   if "вернуть долг" in service_name.lower():
     await state.set_state(OrderForm.debt_details)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
@@ -641,7 +642,6 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
     await render_step(callback, state, "catalog.jpg", text, keyboard)
     return
 
-  # Специфический шаг для "Особый заказ"
   elif "особый заказ" in service_name.lower():
     await state.set_state(OrderForm.custom_task_desc)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
@@ -776,7 +776,7 @@ async def process_photo(message: Message, state: FSMContext):
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = f"📸 Фото #{len(photos)} успешно добавлено. Можете прикрепить еще или завершить:"
-  await render_step(message, state, "photos.jpg", text, keyboard)
+  await render_step(callback, state, "photos.jpg", text, keyboard)
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
@@ -836,7 +836,6 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
   rate = await get_exchange_rate(data.get("curr_code", "USD"))
   local_amount = round(total_price * rate)
 
-  # Суммы более 500$ оплачиваются только в USDT
   is_crypto_only = total_price > 500
 
   if is_crypto_only:
