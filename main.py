@@ -35,6 +35,7 @@ ADMIN_ID = int(admin_env) if admin_env and admin_env.isdigit() else None
 class OrderForm(StatesGroup):
   service = State()
   debt_info = State()
+  debt_wallet = State()
   special_task = State()
   country = State()
   target_location = State()
@@ -622,7 +623,7 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
       ]
   )
   text = "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
-  await render_step(message, state, "catalog.jpg", text, keyboard)
+  await render_step(callback, state, "catalog.jpg", text, keyboard)
 
 @router.callback_query(OrderForm.service, F.data.startswith("srv_"))
 async def process_service(callback: CallbackQuery, state: FSMContext):
@@ -637,7 +638,7 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
     text = (
         "💸 <b>Вернуть долг</b>\n\n"
-        "Укажите какая сумма долга, информацию о должнике и ваш криптокошелек USDT / TON для получения возвращенных денег:"
+        "Укажите какая сумма долга должника и детали:"
     )
     await render_step(callback, state, "catalog.jpg", text, keyboard)
   elif service_name == "Особый заказ":
@@ -674,6 +675,17 @@ async def show_country_selection(event: Message | CallbackQuery, state: FSMConte
 @router.message(OrderForm.debt_info, F.text)
 async def process_debt_info(message: Message, state: FSMContext):
   await state.update_data(debt_info=message.text.strip())
+  await state.set_state(OrderForm.debt_wallet)
+  keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
+  text = (
+      "👛 <b>Реквизиты для получения</b>\n\n"
+      "Укажите ваш криптокошелек USDT / TON, чтобы получить назад деньги с должника:"
+  )
+  await render_step(message, state, "catalog.jpg", text, keyboard)
+
+@router.message(OrderForm.debt_wallet, F.text)
+async def process_debt_wallet(message: Message, state: FSMContext):
+  await state.update_data(debt_wallet=message.text.strip())
   await state.set_state(OrderForm.country)
   data = await state.get_data()
   await show_country_selection(message, state, data.get("service_name"), data.get("service_price"))
@@ -1003,7 +1015,9 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
     try:
       extra_info = ""
       if data.get("debt_info"):
-        extra_info += f"\n• Долг / Кошелек: {data.get('debt_info')}"
+        extra_info += f"\n• Долг / Детали: {data.get('debt_info')}"
+      if data.get("debt_wallet"):
+        extra_info += f"\n• Кошелек для получения: {data.get('debt_wallet')}"
       if data.get("special_task"):
         extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
       await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}{extra_info}", parse_mode="HTML")
@@ -1082,7 +1096,9 @@ async def process_receipt_photo(message: Message, state: FSMContext):
     try:
       extra_info = ""
       if data.get("debt_info"):
-        extra_info += f"\n• Долг / Кошелек: {data.get('debt_info')}"
+        extra_info += f"\n• Долг / Детали: {data.get('debt_info')}"
+      if data.get("debt_wallet"):
+        extra_info += f"\n• Кошелек для получения: {data.get('debt_wallet')}"
       if data.get("special_task"):
         extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
       price_val = f"{data.get('total_price')}$" if data.get('total_price') > 0 else "Расчет менеджера"
@@ -1103,7 +1119,11 @@ async def process_receipt_photo(message: Message, state: FSMContext):
 # === ЗАЩИТНЫЕ (FALLBACK) ХЕНДЛЕРЫ ОТ ЗАВИСАНИЙ И НЕВЕРНОГО ВВОДА ===
 @router.message(OrderForm.debt_info)
 async def fallback_order_debt_info(message: Message):
-  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с информацией о долге, сумме и вашем криптокошельке USDT / TON.")
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с информацией о долге и сумме.")
+
+@router.message(OrderForm.debt_wallet)
+async def fallback_order_debt_wallet(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с вашим криптокошельком USDT или TON.")
 
 @router.message(OrderForm.special_task)
 async def fallback_order_special_task(message: Message):
