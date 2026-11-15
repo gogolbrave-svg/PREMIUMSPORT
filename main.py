@@ -144,21 +144,22 @@ def get_reputation_stats():
   new_requests = rng.randint(29, 46)
   return completed, in_progress, new_requests
 
+# === ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ПОИСКА БАННЕРА ===
+def get_banner_path(banner_name: str):
+  base_name = os.path.splitext(banner_name)[0]
+  if os.path.exists("banners"):
+    for filename in os.listdir("banners"):
+      name_without_ext = os.path.splitext(filename)[0]
+      if name_without_ext.lower() == base_name.lower():
+        return os.path.join("banners", filename)
+  return None
+
 # === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЦЕЛЬНОГО ОБНОВЛЕНИЯ БАННЕРОВ ===
 async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_name: str, text: str, reply_markup: InlineKeyboardMarkup):
   bot = event.bot
   chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
   
-  base_name = os.path.splitext(banner_name)[0]
-  banner_path = None
-  
-  if os.path.exists("banners"):
-    for filename in os.listdir("banners"):
-      name_without_ext = os.path.splitext(filename)[0]
-      if name_without_ext.lower() == base_name.lower():
-        banner_path = os.path.join("banners", filename)
-        break
-
+  banner_path = get_banner_path(banner_name)
   photo = FSInputFile(banner_path) if banner_path and os.path.exists(banner_path) else None
   data = await state.get_data()
   bot_msg_id = data.get("bot_msg_id")
@@ -373,6 +374,7 @@ async def scheduled_broadcast(bot: Bot):
   while True:
     await asyncio.sleep(3600)
     now = datetime.datetime.now()
+    banner_path = get_banner_path("special_offer.jpg")
     for user_id, last_time in list(KNOWN_USERS.items()):
       if last_time is None or (now - last_time).total_seconds() >= 24 * 3600:
         try:
@@ -388,7 +390,13 @@ async def scheduled_broadcast(bot: Bot):
               [InlineKeyboardButton(text="✨ Оформить со скидкой", callback_data="start_order", style="danger")],
               [InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="primary")]
           ])
-          await bot.send_message(chat_id=user_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+          
+          if banner_path and os.path.exists(banner_path):
+            photo = FSInputFile(banner_path)
+            await bot.send_photo(chat_id=user_id, photo=photo, caption=text, reply_markup=keyboard, parse_mode="HTML")
+          else:
+            await bot.send_message(chat_id=user_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+            
           KNOWN_USERS[user_id] = now
         except Exception as e:
           logger.error(f"Ошибка рассылки: {e}")
@@ -402,7 +410,14 @@ async def delayed_abandoned_cart_reminder(bot: Bot, user_id: int):
           [InlineKeyboardButton(text="🛒 Вернуться к заказу", callback_data="start_order", style="danger")],
           [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin", style="danger")]
       ])
-      await bot.send_message(chat_id=user_id, text=reminder_text, reply_markup=keyboard, parse_mode="HTML")
+      
+      banner_path = get_banner_path("abandoned_cart.jpg")
+      if banner_path and os.path.exists(banner_path):
+        photo = FSInputFile(banner_path)
+        await bot.send_photo(chat_id=user_id, photo=photo, caption=reminder_text, reply_markup=keyboard, parse_mode="HTML")
+      else:
+        await bot.send_message(chat_id=user_id, text=reminder_text, reply_markup=keyboard, parse_mode="HTML")
+        
       ABANDONED_CHECKOUTS.pop(user_id, None)
   except asyncio.CancelledError:
     pass
