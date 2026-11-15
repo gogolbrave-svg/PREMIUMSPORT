@@ -233,7 +233,7 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
           [InlineKeyboardButton(text="🛒 Заказать", callback_data="start_order", style="danger")],
           [
               InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders", style="primary"),
-              InlineKeyboardButton(text="📊 Репутация", callback_data="reputation", style="danger"),
+              InlineKeyboardButton(text="📊 Репутация", callback_data="reputation", style="primary"),
           ],
           [InlineKeyboardButton(text="💬 Поддержка", callback_data="contact_admin", style="danger")],
       ]
@@ -1048,7 +1048,7 @@ async def process_vpay_check(callback: CallbackQuery, state: FSMContext):
 
   text = "✅ Залог подтвержден! Анкета передана руководству."
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
-  await render_step(callback, state, "main.jpg", text, keyboard)
+  await render_step(message, state, "main.jpg", text, keyboard)
   await state.clear()
 
 @router.callback_query(F.data == "vpay_crypto_expert")
@@ -1063,7 +1063,7 @@ async def process_vpay_crypto_expert(callback: CallbackQuery, state: FSMContext)
       ]
   )
   text = "🪙 Выберите сеть для залога:"
-  await render_step(callback, state, "payment.jpg", text, keyboard)
+  await render_step(message, state, "payment.jpg", text, keyboard)
 
 @router.callback_query(F.data.startswith("vpay_crypto_"))
 async def process_vpay_crypto(callback: CallbackQuery, state: FSMContext):
@@ -1084,14 +1084,14 @@ async def process_vpay_crypto(callback: CallbackQuery, state: FSMContext):
       [InlineKeyboardButton(text="✅ Прикрепить чек", callback_data="vacancy_ask_receipt", style="danger")],
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="vpay_crypto_expert", style="primary")]
   ])
-  await render_step(callback, state, "payment.jpg", text, keyboard)
+  await render_step(message, state, "payment.jpg", text, keyboard)
 
 @router.callback_query(F.data == "vacancy_ask_receipt")
 async def vacancy_ask_receipt(callback: CallbackQuery, state: FSMContext):
   await state.set_state(VacancyForm.receipt)
   text = "🧾 Отправьте чек о переводе гарантийного залога:"
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
-  await render_step(callback, state, "payment.jpg", text, keyboard)
+  await render_step(message, state, "payment.jpg", text, keyboard)
 
 @router.message(VacancyForm.receipt, F.photo)
 async def process_vacancy_receipt(message: Message, state: FSMContext):
