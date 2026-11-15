@@ -34,8 +34,8 @@ ADMIN_ID = int(admin_env) if admin_env and admin_env.isdigit() else None
 
 class OrderForm(StatesGroup):
   service = State()
-  debt_details = State()
-  custom_task_desc = State()
+  debt_info = State()
+  special_task = State()
   country = State()
   target_location = State()
   target_data = State()
@@ -149,7 +149,7 @@ def get_banner_path(banner_name: str):
         return os.path.join("banners", filename)
   return None
 
-# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЦЕЛЬНОГО ОБНОВЛЕНИЯ БАННЕРОВ (С ИСПРАВЛЕННЫМ FALLBACK) ===
+# === УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЦЕЛЬНОГО ОБНОВЛЕНИЯ БАННЕРОВ (С КЕШИРОВАНИЕМ FILE_ID) ===
 async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_name: str, text: str, reply_markup: InlineKeyboardMarkup):
   bot = event.bot
   chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
@@ -203,7 +203,6 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
     except Exception:
       pass
 
-    edited_successfully = False
     if bot_msg_id:
       try:
         if photo_source:
@@ -223,18 +222,17 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
               reply_markup=reply_markup,
               parse_mode="HTML"
           )
-        edited_successfully = True
+        return
       except Exception:
         pass
 
-    if not edited_successfully:
-      if photo_source:
-        new_msg = await bot.send_photo(chat_id=chat_id, photo=photo_source, caption=text, reply_markup=reply_markup, parse_mode="HTML")
-        if not banner_name in BANNER_CACHE and new_msg.photo:
-          BANNER_CACHE[banner_name] = new_msg.photo[-1].file_id
-      else:
-        new_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
-      await state.update_data(bot_msg_id=new_msg.message_id)
+    if photo_source:
+      new_msg = await bot.send_photo(chat_id=chat_id, photo=photo_source, caption=text, reply_markup=reply_markup, parse_mode="HTML")
+      if not banner_name in BANNER_CACHE and new_msg.photo:
+        BANNER_CACHE[banner_name] = new_msg.photo[-1].file_id
+    else:
+      new_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
+    await state.update_data(bot_msg_id=new_msg.message_id)
 
 # === ГЛАВНОЕ МЕНЮ ===
 async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
@@ -472,13 +470,13 @@ async def cmd_order(message: Message, state: FSMContext):
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
           [InlineKeyboardButton(text="🥊 Избить — 100$", callback_data="srv_Избить_100", style="primary")],
-          [InlineKeyboardButton(text="🧎‍♂️ Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
-          [InlineKeyboardButton(text="💰 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
+          [InlineKeyboardButton(text="🧎 Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
+          [InlineKeyboardButton(text="💸 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
           [InlineKeyboardButton(text="🦴 Сломать пальцы — 300$", callback_data="srv_Сломать_пальцы_300", style="danger")],
           [InlineKeyboardButton(text="🦾 Сломать конечности — 500$", callback_data="srv_Сломать_конечности_500", style="primary")],
           [InlineKeyboardButton(text="🪓 Отрубить конечности — 1000$", callback_data="srv_Отрубить_конечности_1000", style="danger")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="danger")],
-          [InlineKeyboardButton(text="✨ Особый заказ — расчет", callback_data="srv_Особый_заказ_0", style="primary")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="primary")],
+          [InlineKeyboardButton(text="🎯 Особый заказ — Рассчитать сумму", callback_data="srv_Особый_заказ_0", style="danger")],
           [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
@@ -494,7 +492,8 @@ async def cmd_my_orders_msg(message: Message, state: FSMContext):
   else:
     text = "📦 <b>История ваших заказов:</b>\n\n"
     for idx, ord_data in enumerate(orders, 1):
-      text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {ord_data['total_price']}$\n• Статус: {ord_data['status']}\n\n"
+      price_str = f"{ord_data['total_price']}$" if ord_data['total_price'] > 0 else "Индивидуально"
+      text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {price_str}\n• Статус: {ord_data['status']}\n\n"
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(message, state, "my_orders.jpg", text, keyboard)
 
@@ -541,7 +540,8 @@ async def show_my_orders(callback: CallbackQuery, state: FSMContext):
   else:
     text = "📦 <b>История ваших заказов:</b>\n\n"
     for idx, ord_data in enumerate(orders, 1):
-      text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {ord_data['total_price']}$\n• Статус: {ord_data['status']}\n\n"
+      price_str = f"{ord_data['total_price']}$" if ord_data['total_price'] > 0 else "Индивидуально"
+      text += f"<b>Заказ #{idx}</b>\n• Услуга: {ord_data['service_name']}\n• Сумма: {price_str}\n• Статус: {ord_data['status']}\n\n"
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")]])
   await render_step(callback, state, "my_orders.jpg", text, keyboard)
 
@@ -611,13 +611,13 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
           [InlineKeyboardButton(text="🥊 Избить — 100$", callback_data="srv_Избить_100", style="primary")],
-          [InlineKeyboardButton(text="🧎‍♂️ Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
-          [InlineKeyboardButton(text="💰 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
+          [InlineKeyboardButton(text="🧎 Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
+          [InlineKeyboardButton(text="💸 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
           [InlineKeyboardButton(text="🦴 Сломать пальцы — 300$", callback_data="srv_Сломать_пальцы_300", style="danger")],
           [InlineKeyboardButton(text="🦾 Сломать конечности — 500$", callback_data="srv_Сломать_конечности_500", style="primary")],
           [InlineKeyboardButton(text="🪓 Отрубить конечности — 1000$", callback_data="srv_Отрубить_конечности_1000", style="danger")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="danger")],
-          [InlineKeyboardButton(text="✨ Особый заказ — расчет", callback_data="srv_Особый_заказ_0", style="primary")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="primary")],
+          [InlineKeyboardButton(text="🎯 Особый заказ — Рассчитать сумму", callback_data="srv_Особый_заказ_0", style="danger")],
           [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
   )
@@ -632,28 +632,27 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
 
   await state.update_data(service_name=service_name, service_price=price)
 
-  if "вернуть долг" in service_name.lower():
-    await state.set_state(OrderForm.debt_details)
+  if service_name == "Вернуть долг":
+    await state.set_state(OrderForm.debt_info)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
     text = (
-        "💰 <b>Вернуть долг</b>\n\n"
+        "💸 <b>Вернуть долг</b>\n\n"
         "Укажите какой долг должника и введите желаемый способ получить назад деньги (нал, крипта):"
     )
     await render_step(callback, state, "catalog.jpg", text, keyboard)
-    return
-
-  elif "особый заказ" in service_name.lower():
-    await state.set_state(OrderForm.custom_task_desc)
+  elif service_name == "Особый заказ":
+    await state.set_state(OrderForm.special_task)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]])
     text = (
-        "✨ <b>Особый заказ</b>\n\n"
-        "Опишите вашу задачу, что нужно будет сделать и с вами свяжется менеджер для расчета стоимости:"
+        "🎯 <b>Особый заказ</b>\n\n"
+        "Опишите вашу задачу, что нужно будет сделать (с вами свяжется менеджер для расчета стоимости):"
     )
     await render_step(callback, state, "catalog.jpg", text, keyboard)
-    return
+  else:
+    await state.set_state(OrderForm.country)
+    await show_country_selection(callback, state, service_name, price)
 
-  await state.set_state(OrderForm.country)
-
+async def show_country_selection(event: Message | CallbackQuery, state: FSMContext, service_name: str, price: int):
   countries = [
       ("🇷🇺 Россия", "country_Russia"),
       ("🇧🇾 Беларусь", "country_Belarus"),
@@ -668,54 +667,23 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
     kb_rows.append(row)
   kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")])
 
-  text = f"🎯 Выбрано: <b>{service_name}</b> ({price}$)\n\n🌍 <b>Страна вашей цели</b>\n\nВыберите страну из списка:"
-  await render_step(callback, state, "country.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
+  price_str = f"{price}$" if price > 0 else "Расчет менеджера"
+  text = f"🎯 Выбрано: <b>{service_name}</b> ({price_str})\n\n🌍 <b>Страна вашей цели</b>\n\nВыберите страну из списка:"
+  await render_step(event, state, "country.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
-@router.message(OrderForm.debt_details, F.text)
-async def process_debt_details(message: Message, state: FSMContext):
-  await state.update_data(debt_details=message.text.strip())
+@router.message(OrderForm.debt_info, F.text)
+async def process_debt_info(message: Message, state: FSMContext):
+  await state.update_data(debt_info=message.text.strip())
   await state.set_state(OrderForm.country)
-
-  countries = [
-      ("🇷🇺 Россия", "country_Russia"),
-      ("🇧🇾 Беларусь", "country_Belarus"),
-      ("🇺🇦 Украина", "country_Ukraine"),
-      ("🇰🇿 Казахстан", "country_Kazakhstan"),
-  ]
-  kb_rows = []
-  for i in range(0, len(countries), 2):
-    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1], style="primary")]
-    if i + 1 < len(countries):
-      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1], style="danger"))
-    kb_rows.append(row)
-  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")])
-
   data = await state.get_data()
-  text = f"🎯 Выбрано: <b>{data.get('service_name')}</b> ({data.get('service_price')}$)\n\n🌍 <b>Страна вашей цели</b>\n\nВыберите страну из списка:"
-  await render_step(message, state, "country.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
+  await show_country_selection(message, state, data.get("service_name"), data.get("service_price"))
 
-@router.message(OrderForm.custom_task_desc, F.text)
-async def process_custom_task_desc(message: Message, state: FSMContext):
-  await state.update_data(custom_task_desc=message.text.strip())
+@router.message(OrderForm.special_task, F.text)
+async def process_special_task(message: Message, state: FSMContext):
+  await state.update_data(special_task=message.text.strip())
   await state.set_state(OrderForm.country)
-
-  countries = [
-      ("🇷🇺 Россия", "country_Russia"),
-      ("🇧🇾 Беларусь", "country_Belarus"),
-      ("🇺🇦 Украина", "country_Ukraine"),
-      ("🇰🇿 Казахстан", "country_Kazakhstan"),
-  ]
-  kb_rows = []
-  for i in range(0, len(countries), 2):
-    row = [InlineKeyboardButton(text=countries[i][0], callback_data=countries[i][1], style="primary")]
-    if i + 1 < len(countries):
-      row.append(InlineKeyboardButton(text=countries[i+1][0], callback_data=countries[i+1][1], style="danger"))
-    kb_rows.append(row)
-  kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")])
-
   data = await state.get_data()
-  text = f"🎯 Выбрано: <b>{data.get('service_name')}</b> (индивидуальный расчет)\n\n🌍 <b>Страна вашей цели</b>\n\nВыберите страну из списка:"
-  await render_step(message, state, "country.jpg", text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
+  await show_country_selection(message, state, data.get("service_name"), data.get("service_price"))
 
 @router.callback_query(OrderForm.country, F.data.startswith("country_"))
 async def process_country(callback: CallbackQuery, state: FSMContext):
@@ -743,7 +711,7 @@ async def process_target_location(message: Message, state: FSMContext):
       "🪪 <b>Данные цели</b>\n\n"
       "Укажите ФИО или другую информацию о цели (если неизвестно, напишите «неизвестно»):"
   )
-  await render_step(callback, state, "target_data.jpg", text, keyboard)
+  await render_step(message, state, "target_data.jpg", text, keyboard)
 
 @router.message(OrderForm.target_data, F.text)
 async def process_target_data(message: Message, state: FSMContext):
@@ -754,7 +722,7 @@ async def process_target_data(message: Message, state: FSMContext):
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = "📸 Прикрепите фото цели (до 3 шт.) или нажмите кнопку пропуска:"
-  await render_step(callback, state, "photos.jpg", text, keyboard)
+  await render_step(message, state, "photos.jpg", text, keyboard)
 
 @router.message(OrderForm.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
@@ -776,7 +744,7 @@ async def process_photo(message: Message, state: FSMContext):
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")]
   ])
   text = f"📸 Фото #{len(photos)} успешно добавлено. Можете прикрепить еще или завершить:"
-  await render_step(callback, state, "photos.jpg", text, keyboard)
+  await render_step(message, state, "photos.jpg", text, keyboard)
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
@@ -802,18 +770,21 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
   await state.update_data(urgency=urgency, urgency_price=urg_price)
   data = await state.get_data()
   
-  total_price = data.get("service_price", 0) + urg_price
+  base_service_price = data.get("service_price", 0)
+  total_price = (base_service_price + urg_price) if base_service_price > 0 else 0
   await state.update_data(total_price=total_price)
 
   rate = await get_exchange_rate(data.get("curr_code", "USD"))
-  local_amount = round(total_price * rate)
+  local_amount = round(total_price * rate) if total_price > 0 else 0
+
+  price_display = f"<b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>" if total_price > 0 else "<b>Рассчитывается менеджером</b>"
 
   summary_text = (
       "✨ <b>Сводка заказа:</b>\n\n"
       f"• Услуга: <b>{data.get('service_name')}</b>\n"
       f"• Срочность: {urgency}\n"
       f"• Страна: {data.get('country')}\n\n"
-      f"💵 <b>Сумма к оплате: {total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>"
+      f"💵 <b>Сумма к оплате: {price_display}</b>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
       [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment", style="danger")],
@@ -832,18 +803,21 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
   data = await state.get_data()
   total_price = data.get("total_price", 250)
+  service_name = data.get("service_name", "")
   country = data.get("country", "Россия")
   rate = await get_exchange_rate(data.get("curr_code", "USD"))
-  local_amount = round(total_price * rate)
+  local_amount = round(total_price * rate) if total_price > 0 else 0
 
-  is_crypto_only = total_price > 500
+  # Оплата только в USDT если сумма больше 500$ или это Особый заказ
+  is_crypto_only = total_price > 500 or service_name.lower() == "особый заказ"
 
   if is_crypto_only:
+    price_note = f"Сумма: <b>{total_price} USDT</b>" if total_price > 0 else "Сумма: <b>Индивидуальный расчет</b>"
     payment_text = (
         "⏳ <b>Оплата заказа</b>\n"
         "Время на завершение: <b><u>20:00</u></b>\n\n"
-        "⚠️ <b>Внимание:</b> Для сумм свыше 500$ оплата картами недоступна. Доступен CryptoBot и криптовалюта.\n\n"
-        f"Сумма: <b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>"
+        "⚠️ <b>Внимание:</b> Для сумм свыше 500$ и особых заказов оплата картами недоступна. Доступен CryptoBot и криптовалюта.\n\n"
+        f"{price_note}"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -940,6 +914,8 @@ async def process_payment_help_manager(callback: CallbackQuery):
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
   data = await state.get_data()
   total_price = data.get("total_price", 250)
+  if total_price <= 0:
+    total_price = 100  # Дефолтная заглушка для инвойса особого заказа до расчета менеджера
 
   pay_url, inv_id = await create_cryptobot_invoice(total_price, "Оплата услуг")
   if not pay_url:
@@ -974,16 +950,18 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
   if user.id not in USER_ORDERS:
     USER_ORDERS[user.id] = []
-  USER_ORDERS[user.id].append({"service_name": data.get("service_name"), "total_price": data.get("total_price"), "status": "✅ Оплачено через CryptoBot"})
+  
+  service_desc = data.get("service_name")
+  USER_ORDERS[user.id].append({"service_name": service_desc, "total_price": data.get("total_price"), "status": "✅ Оплачено через CryptoBot"})
 
   if ADMIN_ID:
     try:
-      order_details_extra = ""
-      if data.get("debt_details"):
-        order_details_extra += f"\n• Долг/Возврат: {data.get('debt_details')}"
-      if data.get("custom_task_desc"):
-        order_details_extra += f"\n• Задача: {data.get('custom_task_desc')}"
-      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (<code>{user.id}</code>)\n• Услуга: {data.get('service_name')}\n• Сумма: {data.get('total_price')}${order_details_extra}", parse_mode="HTML")
+      extra_info = ""
+      if data.get("debt_info"):
+        extra_info += f"\n• Долг / Возврат: {data.get('debt_info')}"
+      if data.get("special_task"):
+        extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
+      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}{extra_info}", parse_mode="HTML")
     except Exception:
       pass
 
@@ -1017,11 +995,13 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
   data = await state.get_data()
   total_price = data.get("total_price", 250)
   rate = await get_exchange_rate(data.get("curr_code", "USD"))
-  local_amount = round(total_price * rate)
+  local_amount = round(total_price * rate) if total_price > 0 else 0
+
+  price_str = f"<b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>" if total_price > 0 else "<b>Индивидуальный расчет</b>"
 
   text = (
       f"💳 <b>Оплата {net_info['name']}</b>\n\n"
-      f"• Сумма: <b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>\n"
+      f"• Сумма: {price_str}\n"
       f"• Сеть: <b>{net_info['network']}</b>\n"
       f"• Реквизиты:\n<code>{net_info['address']}</code>\n\n"
       "💡 <i>После перевода прикрепите чек.</i>"
@@ -1049,16 +1029,24 @@ async def process_receipt_photo(message: Message, state: FSMContext):
 
   if user.id not in USER_ORDERS:
     USER_ORDERS[user.id] = []
-  USER_ORDERS[user.id].append({"service_name": data.get("service_name"), "total_price": data.get("total_price"), "status": "⏳ Ожидает проверки чека"})
+  
+  service_desc = data.get("service_name")
+  USER_ORDERS[user.id].append({"service_name": service_desc, "total_price": data.get("total_price"), "status": "⏳ Ожидает проверки чека"})
 
   if ADMIN_ID:
     try:
-      order_details_extra = ""
-      if data.get("debt_details"):
-        order_details_extra += f"\n• Долг/Возврат: {data.get('debt_details')}"
-      if data.get("custom_task_desc"):
-        order_details_extra += f"\n• Задача: {data.get('custom_task_desc')}"
-      await message.bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, caption=f"🛒 Новый чек от @{user.username} (<code>{user.id}</code>)\n• Услуга: {data.get('service_name')}\n• Сумма: {data.get('total_price')}${order_details_extra}", parse_mode="HTML")
+      extra_info = ""
+      if data.get("debt_info"):
+        extra_info += f"\n• Долг / Возврат: {data.get('debt_info')}"
+      if data.get("special_task"):
+        extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
+      price_val = f"{data.get('total_price')}$" if data.get('total_price') > 0 else "Расчет менеджера"
+      await message.bot.send_photo(
+          chat_id=ADMIN_ID,
+          photo=message.photo[-1].file_id,
+          caption=f"🛒 Новый чек от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}\n• Сумма: {price_val}{extra_info}",
+          parse_mode="HTML"
+      )
     except Exception:
       pass
 
@@ -1068,13 +1056,13 @@ async def process_receipt_photo(message: Message, state: FSMContext):
   await state.clear()
 
 # === ЗАЩИТНЫЕ (FALLBACK) ХЕНДЛЕРЫ ОТ ЗАВИСАНИЙ И НЕВЕРНОГО ВВОДА ===
-@router.message(OrderForm.debt_details)
-async def fallback_order_debt_details(message: Message):
-  await message.reply("⚠️ Пожалуйста, укажите информацию о долге и желаемом способе возврата средств текстом.")
+@router.message(OrderForm.debt_info)
+async def fallback_order_debt_info(message: Message):
+  await message.reply("⚠️ Пожалуйста, отправьте текстовое сообщение с информацией о долге и желаемом способе возврата денег.")
 
-@router.message(OrderForm.custom_task_desc)
-async def fallback_order_custom_task_desc(message: Message):
-  await message.reply("⚠️ Пожалуйста, опишите вашу задачу текстом.")
+@router.message(OrderForm.special_task)
+async def fallback_order_special_task(message: Message):
+  await message.reply("⚠️ Пожалуйста, опишите вашу задачу текстовым сообщением.")
 
 @router.message(OrderForm.target_location)
 async def fallback_order_location(message: Message):
