@@ -779,6 +779,9 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
 
   price_display = f"<b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>" if total_price > 0 else "<b>Рассчитывается менеджером</b>"
 
+  is_special = data.get("service_name", "").lower() == "особый заказ"
+  payment_btn_text = "✅ Отправить заявку" if is_special else "💳 Перейти к оплате"
+
   summary_text = (
       "✨ <b>Сводка заказа:</b>\n\n"
       f"• Услуга: <b>{data.get('service_name')}</b>\n"
@@ -787,7 +790,7 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
       f"💵 <b>Сумма к оплате: {price_display}</b>"
   )
   keyboard = InlineKeyboardMarkup(inline_keyboard=[
-      [InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="go_to_payment", style="danger")],
+      [InlineKeyboardButton(text=payment_btn_text, callback_data="go_to_payment", style="danger")],
       [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="primary")]
   ])
   await render_step(callback, state, "summary.jpg", summary_text, keyboard)
@@ -795,15 +798,57 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "go_to_payment")
 async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
   user_id = callback.from_user.id
+  data = await state.get_data()
+  service_name = data.get("service_name", "")
+
+  # Если это Особый заказ, завершаем заявку без перехода к оплате и реквизитам
+  if service_name.lower() == "особый заказ":
+    if user_id in ABANDONED_CHECKOUTS:
+      task = ABANDONED_CHECKOUTS.pop(user_id, None)
+      if task:
+        task.cancel()
+
+    if user_id not in USER_ORDERS:
+      USER_ORDERS[user_id] = []
+    USER_ORDERS[user_id].append({
+        "service_name": service_name,
+        "total_price": 0,
+        "status": "⏳ Ожидает расчета стоимости менеджером"
+    })
+
+    if ADMIN_ID:
+      try:
+        user = callback.from_user
+        extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
+        if data.get('country'):
+          extra_info += f"\n• Страна: {data.get('country')}"
+        if data.get('target_location'):
+          extra_info += f"\n• Локация: {data.get('target_location')}"
+        if data.get('target_data'):
+          extra_info += f"\n• Данные цели: {data.get('target_data')}"
+        if data.get('urgency'):
+          extra_info += f"\n• Срочность: {data.get('urgency')}"
+        await callback.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🎯 <b>Новый особый заказ от @{user.username} (<code>{user.id}</code>)</b>{extra_info}",
+            parse_mode="HTML"
+        )
+      except Exception:
+        pass
+
+    text = "✅ <b>Заявка принята!</b>\n\nМенеджер свяжется с вами в течение 25 минут и рассчитает стоимость."
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
+    await render_step(callback, state, "main.jpg", text, keyboard)
+    await state.clear()
+    return
+
   if user_id in ABANDONED_CHECKOUTS:
     task = ABANDONED_CHECKOUTS.pop(user_id, None)
     if task:
       task.cancel()
   ABANDONED_CHECKOUTS[user_id] = asyncio.create_task(delayed_abandoned_cart_reminder(callback.bot, user_id))
 
-  data = await state.get_data()
   total_price = data.get("total_price", 250)
-  service_name = data.get("service_name", "")
   country = data.get("country", "Россия")
   rate = await get_exchange_rate(data.get("curr_code", "USD"))
   local_amount = round(total_price * rate) if total_price > 0 else 0
