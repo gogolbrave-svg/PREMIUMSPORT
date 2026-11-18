@@ -174,10 +174,17 @@ async def render_step(event: Message | CallbackQuery, state: FSMContext, banner_
     msg = event.message
     if photo_source:
       try:
-        sent_msg = await msg.edit_media(
-            media=InputMediaPhoto(media=photo_source, caption=text, parse_mode="HTML"),
-            reply_markup=reply_markup
-        )
+        # Если старое сообщение уже было с фото, меняем медиа
+        if msg.photo:
+          sent_msg = await msg.edit_media(
+              media=InputMediaPhoto(media=photo_source, caption=text, parse_mode="HTML"),
+              reply_markup=reply_markup
+          )
+        else:
+          # Если старое сообщение было текстовым, удаляем и шлем фото
+          await msg.delete()
+          sent_msg = await bot.send_photo(chat_id=chat_id, photo=photo_source, caption=text, reply_markup=reply_markup, parse_mode="HTML")
+        
         if not banner_name in BANNER_CACHE and hasattr(sent_msg, "photo") and sent_msg.photo:
           BANNER_CACHE[banner_name] = sent_msg.photo[-1].file_id
       except Exception:
@@ -652,7 +659,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
-  await render_step(callback, state, "main.jpg", text, keyboard)
+  await render_step(message, state, "main.jpg", text, keyboard)
   await state.clear()
 
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
