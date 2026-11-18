@@ -3,6 +3,7 @@ import datetime
 import logging 
 import os 
 import random
+import re
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -79,6 +80,8 @@ COUNTRY_CURRENCIES = {
     "Беларусь": {"code": "BYN", "symbol": "BYN"},
     "Украина": {"code": "UAH", "symbol": "грн."},
     "Казахстан": {"code": "KZT", "symbol": "₸"},
+    "Узбекистан": {"code": "UZS", "symbol": "сум"},
+    "Молдова": {"code": "MDL", "symbol": "лей"},
 }
 
 # === КРИПТОСЕТИ И РЕКВИЗИТЫ ===
@@ -126,7 +129,7 @@ async def get_exchange_rate(target_currency: str) -> float:
   except Exception as e:
     logger.warning(f"Не удалось получить курс для {target_currency}: {e}")
 
-  fallback_rates = {"RUB": 95.0, "BYN": 3.3, "KZT": 480.0, "UAH": 41.5}
+  fallback_rates = {"RUB": 95.0, "BYN": 3.3, "KZT": 480.0, "UAH": 41.5, "UZS": 12800.0, "MDL": 18.0}
   return fallback_rates.get(target_currency, 1.0)
 
 # === РАСЧЕТ РЕПУТАЦИИ ===
@@ -275,6 +278,58 @@ async def cmd_ban_user(message: Message):
     await message.reply(f"✅ Пользователь с ID <code>{user_id}</code> заблокирован.", parse_mode="HTML")
   else:
     await message.reply("❌ Укажите корректный числовой ID.", parse_mode="Markdown")
+
+@router.message(Command("send"))
+async def cmd_send_to_user(message: Message):
+  if ADMIN_ID and message.from_user.id != ADMIN_ID:
+    return
+  args = message.text.split(maxsplit=2)
+  if len(args) < 3:
+    await message.reply("❌ Использование: `/send <user_id> <текст сообщения>`", parse_mode="Markdown")
+    return
+  target_id_str = args[1].strip()
+  text_to_send = args[2].strip()
+  if target_id_str.isdigit():
+    target_user_id = int(target_id_str)
+    try:
+      await message.bot.send_message(
+          chat_id=target_user_id,
+          text=f"💬 <b>Сообщение от службы поддержки:</b>\n\n{text_to_send}",
+          parse_mode="HTML"
+      )
+      await message.reply(f"✅ Сообщение отправлено пользователю <code>{target_user_id}</code>.", parse_mode="HTML")
+    except Exception as e:
+      await message.reply(f"❌ Не удалось отправить сообщение: {e}")
+  else:
+    await message.reply("❌ Укажите корректный числовой ID пользователя.", parse_mode="Markdown")
+
+@router.message(F.reply_to_message)
+async def admin_reply_handler(message: Message):
+  if ADMIN_ID and message.from_user.id != ADMIN_ID:
+    return
+  
+  reply_msg = message.reply_to_message
+  text_source = (reply_msg.text or "") + "\n" + (reply_msg.caption or "")
+  
+  match = re.search(r"ID:\s*<code>(\d+)</code>|<code>(\d+)</code>", text_source)
+  if not match:
+    match = re.search(r"(?:ID:|\b)(\d{6,})", text_source)
+    
+  if match:
+    target_user_id = int(match.group(1) if match.lastindex == 1 else (match.group(1) or match.group(2)))
+    text_lower = text_source.lower()
+    is_special = "особый заказ" in text_lower or "заказ" in text_lower
+    prefix = "💬 <b>Ответ от менеджера по вашему заказу:</b>" if is_special else "💬 <b>Ответ от службы поддержки:</b>"
+    
+    try:
+      await message.bot.send_message(
+          chat_id=target_user_id,
+          text=f"{prefix}\n\n{message.text}",
+          parse_mode="HTML"
+      )
+      await message.reply("✅ Ответ успешно отправлен клиенту.")
+    except Exception as e:
+      await message.reply(f"❌ Не удалось отправить сообщение клиенту: {e}")
 
 @router.message(Command("clear_cache"))
 async def cmd_clear_cache(message: Message):
@@ -470,13 +525,13 @@ async def cmd_order(message: Message, state: FSMContext):
   await state.set_state(OrderForm.service)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🥊 Избить — 100$", callback_data="srv_Избить_100", style="primary")],
-          [InlineKeyboardButton(text="🧎 Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
-          [InlineKeyboardButton(text="💸 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
-          [InlineKeyboardButton(text="🦴 Сломать пальцы — 300$", callback_data="srv_Сломать_пальцы_300", style="danger")],
-          [InlineKeyboardButton(text="🦾 Сломать конечности — 500$", callback_data="srv_Сломать_конечности_500", style="primary")],
-          [InlineKeyboardButton(text="🪓 Отрубить конечности — 1000$", callback_data="srv_Отрубить_конечности_1000", style="danger")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="primary")],
+          [InlineKeyboardButton(text="🥊 Избить — 60$", callback_data="srv_Избить_60", style="primary")],
+          [InlineKeyboardButton(text="🧎 Извинение на коленях — 90$", callback_data="srv_Извинение_на_коленях_90", style="danger")],
+          [InlineKeyboardButton(text="💸 Вернуть долг — 120$", callback_data="srv_Вернуть_долг_120", style="primary")],
+          [InlineKeyboardButton(text="🦴 Сломать пальцы — 150$", callback_data="srv_Сломать_пальцы_150", style="danger")],
+          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200", style="primary")],
+          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300", style="danger")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 2000$", callback_data="srv_Убийство_2000", style="primary")],
           [InlineKeyboardButton(text="🎯 Особый заказ — Рассчитать сумму", callback_data="srv_Особый_заказ_0", style="danger")],
           [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
@@ -573,7 +628,7 @@ async def process_support_photo(message: Message, state: FSMContext):
   data = await state.get_data()
   user = message.from_user
   user_info = f"@{user.username}" if user.username else f"ID: {user.id}"
-  admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (<code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
+  admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (ID: <code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
   if ADMIN_ID:
     try:
       await message.bot.send_photo(chat_id=ADMIN_ID, photo=photo_id, caption=admin_text, parse_mode="HTML")
@@ -589,7 +644,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
   data = await state.get_data()
   user = callback.from_user
   user_info = f"@{user.username}" if user.username else f"ID: {user.id}"
-  admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (<code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
+  admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (ID: <code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
   if ADMIN_ID:
     try:
       await callback.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML")
@@ -611,13 +666,13 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
   await state.set_state(OrderForm.service)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="🥊 Избить — 100$", callback_data="srv_Избить_100", style="primary")],
-          [InlineKeyboardButton(text="🧎 Извинение на коленях — 150$", callback_data="srv_Извинение_на_коленях_150", style="danger")],
-          [InlineKeyboardButton(text="💸 Вернуть долг — 200$", callback_data="srv_Вернуть_долг_200", style="primary")],
-          [InlineKeyboardButton(text="🦴 Сломать пальцы — 300$", callback_data="srv_Сломать_пальцы_300", style="danger")],
-          [InlineKeyboardButton(text="🦾 Сломать конечности — 500$", callback_data="srv_Сломать_конечности_500", style="primary")],
-          [InlineKeyboardButton(text="🪓 Отрубить конечности — 1000$", callback_data="srv_Отрубить_конечности_1000", style="danger")],
-          [InlineKeyboardButton(text="⚡️ Убийство — 5000$", callback_data="srv_Убийство_5000", style="primary")],
+          [InlineKeyboardButton(text="🥊 Избить — 60$", callback_data="srv_Избить_60", style="primary")],
+          [InlineKeyboardButton(text="🧎 Извинение на коленях — 90$", callback_data="srv_Извинение_на_коленях_90", style="danger")],
+          [InlineKeyboardButton(text="💸 Вернуть долг — 120$", callback_data="srv_Вернуть_долг_120", style="primary")],
+          [InlineKeyboardButton(text="🦴 Сломать пальцы — 150$", callback_data="srv_Сломать_пальцы_150", style="danger")],
+          [InlineKeyboardButton(text="🦾 Сломать конечности — 200$", callback_data="srv_Сломать_конечности_200", style="primary")],
+          [InlineKeyboardButton(text="🪓 Отрубить конечности — 300$", callback_data="srv_Отрубить_конечности_300", style="danger")],
+          [InlineKeyboardButton(text="⚡️ Убийство — 2000$", callback_data="srv_Убийство_2000", style="primary")],
           [InlineKeyboardButton(text="🎯 Особый заказ — Рассчитать сумму", callback_data="srv_Особый_заказ_0", style="danger")],
           [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_home", style="primary")],
       ]
@@ -659,6 +714,8 @@ async def show_country_selection(event: Message | CallbackQuery, state: FSMConte
       ("🇧🇾 Беларусь", "country_Belarus"),
       ("🇺🇦 Украина", "country_Ukraine"),
       ("🇰🇿 Казахстан", "country_Kazakhstan"),
+      ("🇺🇿 Узбекистан", "country_Uzbekistan"),
+      ("🇲🇩 Молдова", "country_Moldova"),
   ]
   kb_rows = []
   for i in range(0, len(countries), 2):
@@ -700,7 +757,14 @@ async def process_special_task(message: Message, state: FSMContext):
 @router.callback_query(OrderForm.country, F.data.startswith("country_"))
 async def process_country(callback: CallbackQuery, state: FSMContext):
   c_code = callback.data.split("_")[1]
-  names = {"Russia": "Россия", "Belarus": "Беларусь", "Ukraine": "Украина", "Kazakhstan": "Казахстан"}
+  names = {
+      "Russia": "Россия",
+      "Belarus": "Беларусь",
+      "Ukraine": "Украина",
+      "Kazakhstan": "Казахстан",
+      "Uzbekistan": "Узбекистан",
+      "Moldova": "Молдова"
+  }
   selected = names.get(c_code, c_code)
   curr_info = COUNTRY_CURRENCIES.get(selected, {"code": "USD", "symbol": "USD"})
   await state.update_data(country=selected, curr_code=curr_info["code"], curr_symbol=curr_info["symbol"])
@@ -763,8 +827,8 @@ async def finish_photos(callback: CallbackQuery, state: FSMContext):
   await state.set_state(OrderForm.urgency)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
-          [InlineKeyboardButton(text="⚡ За 2-3 часа (+50$)", callback_data="urg_fast_50", style="primary")],
-          [InlineKeyboardButton(text="🕐 Завтра (+20$)", callback_data="urg_tomorrow_20", style="danger")],
+          [InlineKeyboardButton(text="⚡ За 2-3 часа (+25$)", callback_data="urg_fast_25", style="primary")],
+          [InlineKeyboardButton(text="🕐 Завтра (+10$)", callback_data="urg_tomorrow_10", style="danger")],
           [InlineKeyboardButton(text="📅 Стандартно (2-5 дней)", callback_data="urg_standard_0", style="primary")],
           [InlineKeyboardButton(text="⬅️ Назад", callback_data="start_order", style="danger")],
       ]
@@ -842,7 +906,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
           extra_info += f"\n• Срочность: {data.get('urgency')}"
         await callback.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"🎯 <b>Новый особый заказ от @{user.username} (<code>{user.id}</code>)</b>{extra_info}",
+            text=f"🎯 <b>Новый особый заказ от @{user.username} (ID: <code>{user.id}</code>)</b>{extra_info}",
             parse_mode="HTML"
         )
       except Exception:
@@ -889,7 +953,9 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         "Россия": "💳 Оплатить на СБП",
         "Казахстан": "💳 Оплатить на Kaspi",
         "Украина": "💳 Оплатить картой",
-        "Беларусь": "💳 Оплатить картой"
+        "Беларусь": "💳 Оплатить картой",
+        "Узбекистан": "💳 Оплатить картой",
+        "Молдова": "💳 Оплатить картой"
     }
     card_btn_text = card_btn_text_map.get(country, "💳 Оплатить картой")
 
@@ -939,7 +1005,9 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
       "Россия": "Оплата по СБП",
       "Казахстан": "Оплата на Kaspi",
       "Украина": "Оплата по реквизитам",
-      "Беларусь": "Оплата по реквизитам"
+      "Беларусь": "Оплата по реквизитам",
+      "Узбекистан": "Оплата по реквизитам",
+      "Молдова": "Оплата по реквизитам"
   }
   header_title = header_map.get(country, "Оплата")
 
@@ -962,7 +1030,7 @@ async def process_payment_help_manager(callback: CallbackQuery):
   if ADMIN_ID:
     try:
       user = callback.from_user
-      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🚨 Запрос помощи с оплатой от @{user.username} (<code>{user.id}</code>)", parse_mode="HTML")
+      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🚨 Запрос помощи с оплатой от @{user.username} (ID: <code>{user.id}</code>)", parse_mode="HTML")
     except Exception:
       pass
   await callback.answer("✅ Менеджер уведомлен, скоро свяжется с вами.", show_alert=True)
@@ -1020,7 +1088,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
         extra_info += f"\n• Кошелек для возврата (USDT/TON): {data.get('debt_wallet')}"
       if data.get("special_task"):
         extra_info += f"\n• Задача (Особый заказ): {data.get('special_task')}"
-      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}{extra_info}", parse_mode="HTML")
+      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🤖 Успешная оплата CryptoBot от @{user.username} (ID: <code>{user.id}</code>)\n• Услуга: {service_desc}{extra_info}", parse_mode="HTML")
     except Exception:
       pass
 
@@ -1105,7 +1173,7 @@ async def process_receipt_photo(message: Message, state: FSMContext):
       await message.bot.send_photo(
           chat_id=ADMIN_ID,
           photo=message.photo[-1].file_id,
-          caption=f"🛒 Новый чек от @{user.username} (<code>{user.id}</code>)\n• Услуга: {service_desc}\n• Сумма: {price_val}{extra_info}",
+          caption=f"🛒 Новый чек от @{user.username} (ID: <code>{user.id}</code>)\n• Услуга: {service_desc}\n• Сумма: {price_val}{extra_info}",
           parse_mode="HTML"
       )
     except Exception:
