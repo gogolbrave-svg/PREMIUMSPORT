@@ -390,12 +390,34 @@ async def cmd_bill_user(message: Message):
   })
 
   try:
-    await message.bot.send_message(
-        chat_id=target_user_id,
-        text=bill_text,
-        reply_markup=build_payment_keyboard(country),
-        parse_mode="HTML",
-    )
+    banner_name = "payment.jpg"
+    banner_path = get_banner_path(banner_name)
+    if banner_name in BANNER_CACHE:
+      sent_bill = await message.bot.send_photo(
+          chat_id=target_user_id,
+          photo=BANNER_CACHE[banner_name],
+          caption=bill_text,
+          reply_markup=build_payment_keyboard(country),
+          parse_mode="HTML",
+      )
+    elif banner_path and os.path.exists(banner_path):
+      sent_bill = await message.bot.send_photo(
+          chat_id=target_user_id,
+          photo=FSInputFile(banner_path),
+          caption=bill_text,
+          reply_markup=build_payment_keyboard(country),
+          parse_mode="HTML",
+      )
+      if sent_bill.photo:
+        BANNER_CACHE[banner_name] = sent_bill.photo[-1].file_id
+    else:
+      sent_bill = await message.bot.send_message(
+          chat_id=target_user_id,
+          text=bill_text,
+          reply_markup=build_payment_keyboard(country),
+          parse_mode="HTML",
+      )
+    USER_BILLS[target_user_id]["bill_msg_id"] = sent_bill.message_id
     await message.reply(
         f"✅ Счет на <b>{service_name}</b> (<b>{amount_str}$</b>) отправлен пользователю <code>{target_user_id}</code> (страна: <b>{country}</b>, валюта: <b>{curr_info['symbol']}</b>).",
         parse_mode="HTML",
