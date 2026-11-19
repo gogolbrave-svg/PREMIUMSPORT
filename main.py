@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 admin_env = os.getenv("ADMIN_ID")
 ADMIN_ID = int(admin_env) if admin_env and admin_env.isdigit() else None
 
+manager_env = os.getenv("MANAGER_ID")
+MANAGER_ID = int(manager_env) if manager_env and manager_env.isdigit() else None
+
 class OrderForm(StatesGroup):
   service = State()
   debt_info = State()
@@ -51,6 +54,7 @@ class SupportForm(StatesGroup):
 
 # Базы данных в памяти
 USER_ORDERS = {}
+USER_LAST_COUNTRY = {}
 KNOWN_USERS = {}
 ABANDONED_CHECKOUTS = {}
 CARD_DETAILS = []      
@@ -269,7 +273,7 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
   )
   await render_step(event, state, "main.jpg", text, keyboard)
 
-# === АДМИНСКИЕ КОМАНДЫ ===
+# === АДМИНСКИЕ И МЕНЕДЖЕРСКИЕ КОМАНДЫ ===
 @router.message(Command("ban"))
 async def cmd_ban_user(message: Message):
   if ADMIN_ID and message.from_user.id != ADMIN_ID:
@@ -286,9 +290,128 @@ async def cmd_ban_user(message: Message):
   else:
     await message.reply("❌ Укажите корректный числовой ID.", parse_mode="Markdown")
 
+@router.message(Command("bill"))
+async def cmd_bill_user(message: Message):
+  allowed_staff = {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}
+  if allowed_staff and message.from_user.id not in allowed_staff:
+    return
+
+  args = message.text.split(maxsplit=1)
+  if len(args) < 2:
+    await message.reply(
+        "❌ Использование: `/bill <user_id> <услуга> <сумма$>`\nПример: `/bill 282810030 особый заказ 220$`",
+        parse_mode="Markdown"
+    )
+    return
+
+  parts = args[1].strip().split()
+  if len(parts) < 2 or not parts[0].isdigit():
+    await message.reply(
+        "❌ Укажите корректный числовой `user_id`, название услуги и сумму.\nПример: `/bill 282810030 особый заказ 220$`",
+        parse_mode="Markdown"
+    )
+    return
+
+  target_user_id = int(parts[0])
+  raw_amount = parts[-1].replace("$", "").replace("usd", "").replace("USD", "").replace(",", ".").strip()
+  try:
+    amount_usd = float(raw_amount)
+    if amount_usd <= 0:
+      raise ValueError()
+  except ValueError:
+    await message.reply("❌ Некорректная сумма. Пример: `/bill 282810030 особый заказ 220$`", parse_mode="Markdown")
+    return
+
+  service_name = " ".join(parts[1:-1]).strip() if len(parts) > 2 else "Особый заказ"
+  if not service_name:
+    service_name = "Особый заказ"
+
+  amount_str = str(int(amount_usd)) if amount_usd.is_integer() else f"{amount_usd:.2f}"
+  country = USER_LAST_COUNTRY.get(target_user_id, "Россия")
+  curr_info = COUNTRY_CURRENCIES.get(country, {"code": "USD", "symbol": "USD"})
+  rate = await get_exchange_rate(curr_info["code"])
+  local_amount = round(amount_usd * rate)
+
+  now = datetime.datetime.now()
+  active_card = None
+  for card in CARD_DETAILS:
+    if card["country"].lower() == country.lower():
+      if card["frozen_until"] and card["frozen_until"] <= now:
+        card["frozen_until"] = None
+      if not card["frozen_until"] or card["frozen_until"] <= now:
+        active_card = card
+        break
+
+  method_label_map = {
+      "Россия": "Оплата по СБП",
+      "Казахстан": "Оплата на Kaspi",
+      "Украина": "Оплата по реквизитам",
+      "Беларусь": "Оплата по реквизитам",
+      "Узбекистан": "Оплата по реквизитам",
+      "Молдова": "Оплата по реквизитам",
+  }
+  country_pay_title = method_label_map.get(country, "Оплата по реквизитам")
+
+  if active_card:
+    country_requisites_block = (
+        f"💳 <b>{country_pay_title} ({country}):</b>\n"
+        f"• Сумма в валюте страны: <b>{local_amount:,} {curr_info['symbol']}</b>\n"
+        f"• Банк: <b>{active_card['bank']}</b>\n"
+        f"• Реквизиты: <code>{active_card['details']}</code>"
+    )
+  else:
+    country_requisites_block = (
+        f"💳 <b>{country_pay_title} ({country}):</b>\n"
+        f"• Сумма в валюте страны: <b>{local_amount:,} {curr_info['symbol']}</b>\n"
+        f"• <i>Реквизиты для страны {country} уточняйте у менеджера или воспользуйтесь CryptoBot / криптой ниже.</i>"
+    )
+
+  pay_url, _ = await create_cryptobot_invoice(amount_usd, f"{service_name} (#{target_user_id})")
+  if pay_url:
+    cryptobot_block = f"🤖 <b>CryptoBot:</b> <b>{amount_str} USDT</b> — <a href=\"{pay_url}\">Оплатить счет</a>"
+  else:
+    cryptobot_block = f"🤖 <b>CryptoBot:</b> <b>{amount_str} USDT</b>"
+
+  crypto_lines = [f"• <b>{net['name']}:</b> <code>{net['address']}</code>" for net in CRYPTO_NETWORKS.values()]
+  crypto_block = "🪙 <b>Реквизиты криптовалюты:</b>\n" + "\n".join(crypto_lines)
+
+  bill_text = (
+      f"🧾 <b>Вам выставлен счет на {service_name}</b>\n\n"
+      f"• Услуга: <b>{service_name}</b>\n"
+      f"• Страна: <b>{country}</b>\n"
+      f"• Сумма к оплате: <b>{amount_str}$</b> <i>(≈ {local_amount:,} {curr_info['symbol']})</i>\n\n"
+      f"{country_requisites_block}\n\n"
+      f"{cryptobot_block}\n\n"
+      f"{crypto_block}\n\n"
+      f"💡 <i>После оплаты отправьте чек или напишите менеджеру.</i>"
+  )
+
+  if target_user_id not in USER_ORDERS:
+    USER_ORDERS[target_user_id] = []
+  USER_ORDERS[target_user_id].append({
+      "service_name": service_name,
+      "total_price": int(amount_usd) if amount_usd.is_integer() else amount_usd,
+      "status": "🧾 Выставлен счет"
+  })
+
+  try:
+    await message.bot.send_message(
+        chat_id=target_user_id,
+        text=bill_text,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await message.reply(
+        f"✅ Счет на <b>{service_name}</b> (<b>{amount_str}$</b>) отправлен пользователю <code>{target_user_id}</code> (страна: <b>{country}</b>).",
+        parse_mode="HTML",
+    )
+  except Exception as e:
+    await message.reply(f"❌ Не удалось отправить счет пользователю <code>{target_user_id}</code>: {e}", parse_mode="HTML")
+
 @router.message(Command("send"))
 async def cmd_send_to_user(message: Message):
-  if ADMIN_ID and message.from_user.id != ADMIN_ID:
+  allowed_staff = {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}
+  if allowed_staff and message.from_user.id not in allowed_staff:
     return
   args = message.text.split(maxsplit=2)
   if len(args) < 3:
@@ -301,7 +424,7 @@ async def cmd_send_to_user(message: Message):
     try:
       await message.bot.send_message(
           chat_id=target_user_id,
-          text=f"💬 <b>Сообщение от службы поддержки:</b>\n\n{text_to_send}",
+          text=f"💬 <b>Сообщение от менеджера:</b>\n\n{text_to_send}",
           parse_mode="HTML"
       )
       await message.reply(f"✅ Сообщение отправлено пользователю <code>{target_user_id}</code>.", parse_mode="HTML")
@@ -312,7 +435,8 @@ async def cmd_send_to_user(message: Message):
 
 @router.message(F.reply_to_message)
 async def admin_reply_handler(message: Message):
-  if ADMIN_ID and message.from_user.id != ADMIN_ID:
+  allowed_staff = {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}
+  if allowed_staff and message.from_user.id not in allowed_staff:
     return
   
   reply_msg = message.reply_to_message
@@ -659,7 +783,7 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
   keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 На главную", callback_data="back_home", style="danger")]])
-  await render_step(message, state, "main.jpg", text, keyboard)
+  await render_step(callback, state, "main.jpg", text, keyboard)
   await state.clear()
 
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
@@ -773,6 +897,7 @@ async def process_country(callback: CallbackQuery, state: FSMContext):
       "Moldova": "Молдова"
   }
   selected = names.get(c_code, c_code)
+  USER_LAST_COUNTRY[callback.from_user.id] = selected
   curr_info = COUNTRY_CURRENCIES.get(selected, {"code": "USD", "symbol": "USD"})
   await state.update_data(country=selected, curr_code=curr_info["code"], curr_symbol=curr_info["symbol"])
 
