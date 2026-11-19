@@ -392,13 +392,14 @@ async def cmd_bill_user(message: Message, state: FSMContext):
       f"Сумма: <b>{amount_str}$</b> <i>(≈ {local_amount:,} {curr_info['symbol']})</i>"
   )
 
-  if target_user_id not in USER_ORDERS:
-    USER_ORDERS[target_user_id] = []
-  USER_ORDERS[target_user_id].append({
-      "service_name": service_name,
-      "total_price": amount_val,
-      "status": "🧾 Выставлен счет"
-  })
+  if service_name.lower() != "особый заказ":
+    if target_user_id not in USER_ORDERS:
+      USER_ORDERS[target_user_id] = []
+    USER_ORDERS[target_user_id].append({
+        "service_name": service_name,
+        "total_price": amount_val,
+        "status": "🧾 Выставлен счет"
+    })
 
   try:
     banner_name = "payment.jpg"
@@ -1045,14 +1046,6 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
       task = ABANDONED_CHECKOUTS.pop(user_id, None)
       if task:
         task.cancel()
-
-    if user_id not in USER_ORDERS:
-      USER_ORDERS[user_id] = []
-    USER_ORDERS[user_id].append({
-        "service_name": service_name,
-        "total_price": 0,
-        "status": "⏳ Ожидает расчета стоимости менеджером"
-    })
 
     if ADMIN_ID:
       try:
