@@ -164,7 +164,10 @@ async def get_payment_context(user_id: int, state: FSMContext):
   curr_info = COUNTRY_CURRENCIES.get(country, {"code": "USD", "symbol": "USD"})
   curr_code = data.get("curr_code") or bill.get("curr_code") or curr_info["code"]
   curr_symbol = data.get("curr_symbol") or bill.get("curr_symbol") or curr_info["symbol"]
-  total_price = data.get("total_price") if data.get("total_price") is not None else bill.get("total_price", 250)
+  if bill:
+    total_price = bill.get("total_price", 250)
+  else:
+    total_price = data.get("total_price") if data.get("total_price") is not None else 250
   service_name = data.get("service_name") or bill.get("service_name") or "Услуга"
   return data, country, curr_code, curr_symbol, total_price, service_name
 
@@ -323,7 +326,7 @@ async def cmd_ban_user(message: Message):
     await message.reply("❌ Укажите корректный числовой ID.", parse_mode="Markdown")
 
 @router.message(Command("bill"))
-async def cmd_bill_user(message: Message):
+async def cmd_bill_user(message: Message, state: FSMContext):
   allowed_staff = {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}
   if allowed_staff and message.from_user.id not in allowed_staff:
     return
@@ -372,6 +375,14 @@ async def cmd_bill_user(message: Message):
       "curr_code": curr_info["code"],
       "curr_symbol": curr_info["symbol"],
   }
+  if message.from_user.id == target_user_id:
+    await state.update_data(
+        service_name=service_name,
+        total_price=amount_val,
+        country=country,
+        curr_code=curr_info["code"],
+        curr_symbol=curr_info["symbol"],
+    )
 
   bill_text = (
       "⏳ <b>Оплата заказа</b>\n"
@@ -418,6 +429,8 @@ async def cmd_bill_user(message: Message):
           parse_mode="HTML",
       )
     USER_BILLS[target_user_id]["bill_msg_id"] = sent_bill.message_id
+    if message.from_user.id == target_user_id:
+      await state.update_data(bot_msg_id=sent_bill.message_id)
     await message.reply(
         f"✅ Счет на <b>{service_name}</b> (<b>{amount_str}$</b>) отправлен пользователю <code>{target_user_id}</code> (страна: <b>{country}</b>, валюта: <b>{curr_info['symbol']}</b>).",
         parse_mode="HTML",
