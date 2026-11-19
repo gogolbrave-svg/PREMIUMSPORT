@@ -791,9 +791,9 @@ async def process_support_photo(message: Message, state: FSMContext):
   user = message.from_user
   user_info = f"@{user.username}" if user.username else f"ID: {user.id}"
   admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (ID: <code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
-  if ADMIN_ID:
+  for staff_id in {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}:
     try:
-      await message.bot.send_photo(chat_id=ADMIN_ID, photo=photo_id, caption=admin_text, parse_mode="HTML")
+      await message.bot.send_photo(chat_id=staff_id, photo=photo_id, caption=admin_text, parse_mode="HTML")
     except Exception:
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
@@ -807,9 +807,9 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
   user = callback.from_user
   user_info = f"@{user.username}" if user.username else f"ID: {user.id}"
   admin_text = f"📩 <b>Новое обращение в поддержку</b>\n\n• От кого: {user_info} (ID: <code>{user.id}</code>)\n• Вопрос: {data.get('reason')}"
-  if ADMIN_ID:
+  for staff_id in {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}:
     try:
-      await callback.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML")
+      await callback.bot.send_message(chat_id=staff_id, text=admin_text, parse_mode="HTML")
     except Exception:
       pass
   text = "✅ Обращение отправлено! Специалист скоро свяжется с вами."
@@ -1046,20 +1046,20 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
       if task:
         task.cancel()
 
-    if ADMIN_ID:
+    user = callback.from_user
+    extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
+    if data.get('country'):
+      extra_info += f"\n• Страна: {data.get('country')}"
+    if data.get('target_location'):
+      extra_info += f"\n• Локация: {data.get('target_location')}"
+    if data.get('target_data'):
+      extra_info += f"\n• Данные цели: {data.get('target_data')}"
+    if data.get('urgency'):
+      extra_info += f"\n• Срочность: {data.get('urgency')}"
+    for staff_id in {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}:
       try:
-        user = callback.from_user
-        extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
-        if data.get('country'):
-          extra_info += f"\n• Страна: {data.get('country')}"
-        if data.get('target_location'):
-          extra_info += f"\n• Локация: {data.get('target_location')}"
-        if data.get('target_data'):
-          extra_info += f"\n• Данные цели: {data.get('target_data')}"
-        if data.get('urgency'):
-          extra_info += f"\n• Срочность: {data.get('urgency')}"
         await callback.bot.send_message(
-            chat_id=ADMIN_ID,
+            chat_id=staff_id,
             text=f"🎯 <b>Новый особый заказ от @{user.username} (ID: <code>{user.id}</code>)</b>{extra_info}",
             parse_mode="HTML"
         )
@@ -1161,10 +1161,10 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "payment_help_manager")
 async def process_payment_help_manager(callback: CallbackQuery):
-  if ADMIN_ID:
+  user = callback.from_user
+  for staff_id in {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}:
     try:
-      user = callback.from_user
-      await callback.bot.send_message(chat_id=ADMIN_ID, text=f"🚨 Запрос помощи с оплатой от @{user.username} (ID: <code>{user.id}</code>)", parse_mode="HTML")
+      await callback.bot.send_message(chat_id=staff_id, text=f"🚨 Запрос помощи с оплатой от @{user.username} (ID: <code>{user.id}</code>)", parse_mode="HTML")
     except Exception:
       pass
   await callback.answer("✅ Менеджер уведомлен, скоро свяжется с вами.", show_alert=True)
