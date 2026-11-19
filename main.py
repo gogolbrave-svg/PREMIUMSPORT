@@ -1037,11 +1037,10 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "go_to_payment")
 async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
   user_id = callback.from_user.id
-  data = await state.get_data()
-  service_name = data.get("service_name", "")
+  data, country, curr_code, curr_symbol, total_price, service_name = await get_payment_context(user_id, state)
 
-  # Если это Особый заказ, завершаем заявку без перехода к оплате и реквизитам
-  if service_name.lower() == "особый заказ":
+  # Если это Особый заказ (и нет активного счета от менеджера), завершаем заявку без перехода к оплате и реквизитам
+  if service_name.lower() == "особый заказ" and user_id not in USER_BILLS:
     if user_id in ABANDONED_CHECKOUTS:
       task = ABANDONED_CHECKOUTS.pop(user_id, None)
       if task:
@@ -1079,13 +1078,11 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
       task.cancel()
   ABANDONED_CHECKOUTS[user_id] = asyncio.create_task(delayed_abandoned_cart_reminder(callback.bot, user_id))
 
-  total_price = data.get("total_price", 250)
-  country = data.get("country", "Россия")
-  rate = await get_exchange_rate(data.get("curr_code", "USD"))
+  rate = await get_exchange_rate(curr_code)
   local_amount = round(total_price * rate) if total_price > 0 else 0
 
-  # Оплата только в USDT если сумма больше 500$ или это Особый заказ
-  is_crypto_only = total_price > 500 or service_name.lower() == "особый заказ"
+  # Оплата только в USDT если сумма больше 500$ или это Особый заказ без выставленного счета
+  is_crypto_only = total_price > 500 or (service_name.lower() == "особый заказ" and user_id not in USER_BILLS)
 
   if is_crypto_only:
     price_note = f"Сумма: <b>{total_price} USDT</b>" if total_price > 0 else "Сумма: <b>Индивидуальный расчет</b>"
@@ -1104,11 +1101,13 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         ]
     )
   else:
+    bill_prefix = f"🧾 <b>Счет на {service_name}</b>\n" if user_id in USER_BILLS else ""
     payment_text = (
         "⏳ <b>Оплата заказа</b>\n"
         "Время на завершение: <b><u>20:00</u></b>\n\n"
+        f"{bill_prefix}"
         f"💳 <b>Способ оплаты ({country})</b>\n"
-        f"Сумма: <b>{total_price}$</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>"
+        f"Сумма: <b>{total_price}$</b> <i>(≈ {local_amount:,} {curr_symbol})</i>"
     )
     keyboard = build_payment_keyboard(country)
 
