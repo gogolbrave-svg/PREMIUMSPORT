@@ -1231,6 +1231,71 @@ async def cmd_freeze_card(message: Message):
     await message.reply("❌ Не найдено.")
 
 
+@router.message(Command("list"))
+async def cmd_list_details(message: Message):
+  if ADMIN_ID and message.from_user.id != ADMIN_ID:
+    return
+
+  now = datetime.datetime.now()
+  active_cards = []
+  frozen_cards = []
+
+  for card in CARD_DETAILS:
+    frozen_until = card.get("frozen_until")
+    if frozen_until and frozen_until > now:
+      frozen_cards.append((card, frozen_until))
+    else:
+      if frozen_until and frozen_until <= now:
+        card["frozen_until"] = None
+        queue_db((
+            "card_freeze",
+            card["details"],
+            card["bank"],
+            card["country"],
+            None,
+        ))
+      active_cards.append(card)
+
+  active_crypto = []
+  for net_key, address in CRYPTO_DETAILS.items():
+    net_name = CRYPTO_NETWORKS.get(net_key, {}).get("name", net_key.upper())
+    active_crypto.append((net_name, address))
+
+  lines = ["📋 <b>Актуальные реквизиты (в работе):</b>\n"]
+
+  if active_cards:
+    lines.append("💳 <b>Карты / переводы:</b>")
+    for idx, card in enumerate(active_cards, 1):
+      lines.append(
+          f"{idx}. 🌍 <b>{card['country']}</b> | 🏦 <b>{card['bank']}</b> —"
+          f" <code>{card['details']}</code>"
+      )
+  else:
+    lines.append("💳 <b>Карты / переводы:</b> нет активных")
+
+  if active_crypto:
+    lines.append("\n🪙 <b>Криптовалюта:</b>")
+    for idx, (net_name, address) in enumerate(active_crypto, 1):
+      lines.append(f"{idx}. <b>{net_name}</b> — <code>{address}</code>")
+
+  lines.append("\n❄️ <b>Зафриженные на 24 часа (недоступны):</b>")
+  if frozen_cards:
+    for idx, (card, until_dt) in enumerate(frozen_cards, 1):
+      remaining = until_dt - now
+      total_minutes = max(1, int(remaining.total_seconds() // 60))
+      rem_hours, rem_mins = divmod(total_minutes, 60)
+      lines.append(
+          f"{idx}. 🌍 <b>{card['country']}</b> | 🏦 <b>{card['bank']}</b> —"
+          f" <code>{card['details']}</code>"
+          f" (осталось {rem_hours}ч {rem_mins}м, до"
+          f" {until_dt.strftime('%d.%m %H:%M')})"
+      )
+  else:
+    lines.append("Нет зафриженных реквизитов.")
+
+  await message.reply("\n".join(lines), parse_mode="HTML")
+
+
 # === CRYPTOBOT ИНТЕГРАЦИЯ ===
 async def create_cryptobot_invoice(amount_usd: float, description: str):
   if not CRYPTO_BOT_TOKEN:
