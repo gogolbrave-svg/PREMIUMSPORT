@@ -66,6 +66,7 @@ ABANDONED_CHECKOUTS = {}
 CARD_DETAILS = []
 CARD_POINTERS = {}
 CRYPTO_DETAILS = {}
+CRYPTO_POINTERS = {}
 BANNED_USERS = set()
 BANNER_CACHE = {}  # Кэш file_id баннеров для мгновенной загрузки
 
@@ -97,7 +98,8 @@ async def init_db():
             frozen_until TIMESTAMP NULL
         );
         CREATE TABLE IF NOT EXISTS crypto_details (
-            network_key TEXT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
+            network_key TEXT NOT NULL,
             address TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS banned_users (
@@ -129,6 +131,33 @@ async def init_db():
         );
     """)
 
+    # Миграция схемы crypto_details, если таблица была создана со старым PRIMARY KEY (network_key)
+    pk_col = await conn.fetchval("""
+        SELECT a.attname
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = 'crypto_details'::regclass AND i.indisprimary
+        LIMIT 1
+    """)
+    has_id_col = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'crypto_details' AND column_name = 'id'
+        )
+    """)
+    if pk_col == "network_key" or not has_id_col:
+      await conn.execute("""
+          CREATE TABLE IF NOT EXISTS crypto_details_new (
+              id SERIAL PRIMARY KEY,
+              network_key TEXT NOT NULL,
+              address TEXT NOT NULL
+          );
+          INSERT INTO crypto_details_new (network_key, address)
+          SELECT network_key, address FROM crypto_details;
+          DROP TABLE crypto_details;
+          ALTER TABLE crypto_details_new RENAME TO crypto_details;
+      """)
+
     # Загрузка реквизитов карт
     CARD_DETAILS.clear()
     for row in await conn.fetch(
@@ -142,12 +171,12 @@ async def init_db():
           "frozen_until": row["frozen_until"],
       })
 
-    # Загрузка криптореквизитов
+    # Загрузка криптореквизитов (списком по каждой сети)
     CRYPTO_DETAILS.clear()
     for row in await conn.fetch(
-        "SELECT network_key, address FROM crypto_details"
+        "SELECT network_key, address FROM crypto_details ORDER BY id ASC"
     ):
-      CRYPTO_DETAILS[row["network_key"]] = row["address"]
+      CRYPTO_DETAILS.setdefault(row["network_key"], []).append(row["address"])
 
     # Загрузка банов
     BANNED_USERS.clear()
@@ -239,13 +268,17 @@ async def _exec_db_action(action: tuple):
             country,
             frozen_until,
         )
-      elif kind == "crypto_set":
+      elif kind == "crypto_add":
         _, net_key, address = action
         await conn.execute(
-            """
-            INSERT INTO crypto_details (network_key, address) VALUES ($1, $2)
-            ON CONFLICT (network_key) DO UPDATE SET address = EXCLUDED.address
-            """,
+            "INSERT INTO crypto_details (network_key, address) VALUES ($1, $2)",
+            net_key,
+            address,
+        )
+      elif kind == "crypto_delete_addr":
+        _, net_key, address = action
+        await conn.execute(
+            "DELETE FROM crypto_details WHERE network_key = $1 AND address = $2",
             net_key,
             address,
         )
@@ -423,6 +456,20 @@ def get_next_card(country: str):
   chosen_card = active[index]
   CARD_POINTERS[country] = (index + 1) % len(active)
   return chosen_card
+
+
+def get_next_crypto(net_key: str):
+  addresses = CRYPTO_DETAILS.get(net_key) or []
+  if not addresses:
+    return None
+
+  if net_key not in CRYPTO_POINTERS:
+    CRYPTO_POINTERS[net_key] = 0
+
+  index = CRYPTO_POINTERS[net_key] % len(addresses)
+  chosen_address = addresses[index]
+  CRYPTO_POINTERS[net_key] = (index + 1) % len(addresses)
+  return chosen_address
 
 
 # === ФУНКЦИЯ ПОЛУЧЕНИЯ КУРСОВ ВАЛЮТ ===
@@ -1113,11 +1160,13 @@ async def cmd_add_card(message: Message):
     net_part = " ".join(parts[1:])
     net_key = normalize_crypto_key(net_part)
     if net_key:
-      CRYPTO_DETAILS[net_key] = address
-      queue_db(("crypto_set", net_key, address))
+      CRYPTO_DETAILS.setdefault(net_key, []).append(address)
+      queue_db(("crypto_add", net_key, address))
       net_name = CRYPTO_NETWORKS[net_key]["name"]
+      total_in_net = len(CRYPTO_DETAILS[net_key])
       await message.reply(
-          f"✅ Криптореквизиты добавлены!\n🪙 <b>{net_name}</b>\n<code>{address}</code>",
+          f"✅ Криптореквизиты добавлены в список ({total_in_net} шт.)!\n"
+          f"🪙 <b>{net_name}</b>\n<code>{address}</code>",
           parse_mode="HTML",
       )
       return
@@ -1151,7 +1200,8 @@ async def cmd_delete_card(message: Message):
     await message.reply(
         "❌ Использование:\n"
         "• Карта: `/delete <реквизиты> <Банк> <Страна>`\n"
-        "• Крипта: `/delete <USDT TRC-20 / USDT TON / BEP-20 / BTC>`",
+        "• Крипта: `/delete <USDT TRC-20 / USDT TON / BEP-20 / BTC>` или"
+        " `/delete <адрес> <USDT TRC-20>`",
         parse_mode="Markdown",
     )
     return
@@ -1159,11 +1209,13 @@ async def cmd_delete_card(message: Message):
   raw_arg = args[1].strip()
   net_key = normalize_crypto_key(raw_arg)
   if net_key:
-    if net_key in CRYPTO_DETAILS:
+    if net_key in CRYPTO_DETAILS and CRYPTO_DETAILS[net_key]:
       CRYPTO_DETAILS.pop(net_key, None)
+      CRYPTO_POINTERS.pop(net_key, None)
       queue_db(("crypto_delete", net_key))
       await message.reply(
-          f"✅ Криптореквизиты для <b>{CRYPTO_NETWORKS[net_key]['name']}</b> удалены.",
+          f"✅ Все криптореквизиты для <b>{CRYPTO_NETWORKS[net_key]['name']}</b>"
+          " удалены.",
           parse_mode="HTML",
       )
     else:
@@ -1171,6 +1223,28 @@ async def cmd_delete_card(message: Message):
     return
 
   parts = raw_arg.split()
+  if len(parts) >= 2:
+    addr_candidate = parts[0]
+    net_candidate_key = normalize_crypto_key(" ".join(parts[1:]))
+    if net_candidate_key:
+      addrs = CRYPTO_DETAILS.get(net_candidate_key) or []
+      if addr_candidate in addrs:
+        CRYPTO_DETAILS[net_candidate_key] = [
+            a for a in addrs if a != addr_candidate
+        ]
+        if not CRYPTO_DETAILS[net_candidate_key]:
+          CRYPTO_DETAILS.pop(net_candidate_key, None)
+          CRYPTO_POINTERS.pop(net_candidate_key, None)
+        queue_db(("crypto_delete_addr", net_candidate_key, addr_candidate))
+        await message.reply(
+            f"✅ Кошелек <code>{addr_candidate}</code> удален из"
+            f" <b>{CRYPTO_NETWORKS[net_candidate_key]['name']}</b>.",
+            parse_mode="HTML",
+        )
+      else:
+        await message.reply("❌ Указанный криптокошелек не найден в списке.")
+      return
+
   if len(parts) < 3:
     await message.reply("❌ Неверный формат.")
     return
@@ -1257,9 +1331,10 @@ async def cmd_list_details(message: Message):
       active_cards.append(card)
 
   active_crypto = []
-  for net_key, address in CRYPTO_DETAILS.items():
+  for net_key, addresses in CRYPTO_DETAILS.items():
     net_name = CRYPTO_NETWORKS.get(net_key, {}).get("name", net_key.upper())
-    active_crypto.append((net_name, address))
+    for addr in addresses:
+      active_crypto.append((net_name, addr))
 
   lines = ["📋 <b>Актуальные реквизиты (в работе):</b>\n"]
 
@@ -2502,7 +2577,7 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Сеть не найдена", show_alert=True)
     return
 
-  address = CRYPTO_DETAILS.get(net_key)
+  address = get_next_crypto(net_key)
   if not address:
     text = (
         "❌ <b>Реквизиты временно недоступны</b>\n\n"
