@@ -2233,6 +2233,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_card_option")
 async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
+  await state.update_data(payment_method="card")
   _, country, curr_code, curr_symbol, total_price, _ = (
       await get_payment_context(callback.from_user.id, state)
   )
@@ -2450,6 +2451,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "crypto_expert")
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
+  await state.update_data(payment_method="crypto")
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
           [
@@ -2493,6 +2495,7 @@ async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_crypto_"))
 async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
+  await state.update_data(payment_method="crypto")
   net_key = callback.data.split("_")[2]
   net_info = CRYPTO_NETWORKS.get(net_key)
   if not net_info:
@@ -2550,7 +2553,7 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
       f"• Сумма: {price_str}\n"
       f"• Сеть: <b>{net_info['network']}</b>\n"
       f"• Реквизиты:\n<code>{address}</code>\n\n"
-      "💡 <i>После перевода прикрепите чек.</i>"
+      "💡 <i>После перевода прикрепите фото скриншот оплаты перевода.</i>"
   )
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[
@@ -2573,6 +2576,8 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
+  data = await state.get_data()
+  payment_method = data.get("payment_method", "card")
   await state.set_state(OrderForm.receipt)
   keyboard = InlineKeyboardMarkup(
       inline_keyboard=[[
@@ -2581,9 +2586,15 @@ async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
           )
       ]]
   )
-  text = (
-      "🧾 Отправьте скриншот или фото чека следующим сообщением:"
-  )
+  if payment_method == "crypto":
+    text = (
+        "🧾 Отправьте фото скриншот оплаты перевода следующим сообщением:"
+    )
+  else:
+    text = (
+        "🧾 Отправьте фото чека или документ квитанции об оплате следующим"
+        " сообщением:"
+    )
   await render_step(callback, state, "payment.jpg", text, keyboard)
 
 
@@ -2629,6 +2640,86 @@ async def process_receipt_photo(message: Message, state: FSMContext):
       await message.bot.send_photo(
           chat_id=staff_id,
           photo=message.photo[-1].file_id,
+          caption=receipt_caption,
+          parse_mode="HTML",
+      )
+      for p_id in target_photos:
+        await message.bot.send_photo(
+            chat_id=staff_id,
+            photo=p_id,
+            caption=(
+                f"📸 Фото цели по чеку от @{user.username} (ID:"
+                f" <code>{user.id}</code>)"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+      pass
+
+  text = (
+      "✅ Чек получен! Менеджер проверит платеж в течение 25 минут."
+  )
+  keyboard = InlineKeyboardMarkup(
+      inline_keyboard=[[
+          InlineKeyboardButton(
+              text="🏠 На главную", callback_data="back_home", style="danger"
+          )
+      ]]
+  )
+  await render_step(message, state, "main.jpg", text, keyboard)
+  await state.clear()
+
+
+@router.message(OrderForm.receipt, F.document)
+async def process_receipt_document(message: Message, state: FSMContext):
+  data = await state.get_data()
+  payment_method = data.get("payment_method", "card")
+  if payment_method == "crypto":
+    await message.reply(
+        "⚠️ Для оплаты криптовалютой отправьте фото скриншот оплаты перевода."
+    )
+    return
+
+  user = message.from_user
+  task = ABANDONED_CHECKOUTS.pop(user.id, None)
+  if task:
+    task.cancel()
+  data, country, _, _, total_price, service_desc = await get_payment_context(
+      user.id, state
+  )
+
+  if user.id not in USER_ORDERS:
+    USER_ORDERS[user.id] = []
+
+  USER_ORDERS[user.id].append({
+      "service_name": service_desc,
+      "total_price": total_price,
+      "status": "⏳ Ожидает проверки чека",
+  })
+  queue_db((
+      "order_add",
+      user.id,
+      service_desc,
+      total_price,
+      "⏳ Ожидает проверки чека",
+  ))
+  USER_BILLS.pop(user.id, None)
+  queue_db(("bill_delete", user.id))
+
+  order_details = _build_order_details_text(
+      data, country, service_desc, total_price
+  )
+  receipt_caption = (
+      f"🛒 Новая квитанция (документ) от @{user.username} (ID:"
+      f" <code>{user.id}</code>){order_details}"
+  )
+  target_photos = data.get("photos") or []
+
+  for staff_id in {uid for uid in (ADMIN_ID, MANAGER_ID) if uid is not None}:
+    try:
+      await message.bot.send_document(
+          chat_id=staff_id,
+          document=message.document.file_id,
           caption=receipt_caption,
           parse_mode="HTML",
       )
@@ -2708,10 +2799,16 @@ async def fallback_order_photos(message: Message):
 
 
 @router.message(OrderForm.receipt)
-async def fallback_order_receipt(message: Message):
-  await message.reply(
-      "⚠️ Пожалуйста, отправьте скриншот или фото чека об оплате."
-  )
+async def fallback_order_receipt(message: Message, state: FSMContext):
+  data = await state.get_data()
+  if data.get("payment_method") == "crypto":
+    await message.reply(
+        "⚠️ Пожалуйста, отправьте фото скриншот оплаты перевода."
+    )
+  else:
+    await message.reply(
+        "⚠️ Пожалуйста, отправьте фото чека или документ квитанции об оплате."
+    )
 
 
 @router.message(SupportForm.reason)
