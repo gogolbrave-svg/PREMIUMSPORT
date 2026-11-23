@@ -4411,20 +4411,14 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     rate = await get_exchange_rate(curr_code)
     local_amount = round(total_price * rate) if total_price > 0 else 0
 
-    is_crypto_only = total_price > 500 or (
-        service_name.lower() == "особый заказ" and user_id not in USER_BILLS
-    )
+    is_crypto_only = total_price > 500
 
     if is_crypto_only:
-        price_note = (
-            f"Сумма: <b>{total_price} USDT</b>"
-            if total_price > 0
-            else "Сумма: <b>Индивидуальный расчет</b>"
-        )
+        price_note = f"Сумма: <b>{total_price} USDT</b>"
         payment_text = (
             "⏳ <b>Оплата заказа</b>\n"
             "Время на завершение: <b><u>20:00</u></b>\n\n"
-            "⚠️ <b>Внимание:</b> Для сумм свыше 500$ и особых заказов оплата"
+            "⚠️ <b>Внимание:</b> Для сумм свыше 500$ оплата"
             " картами недоступна. Доступен CryptoBot и криптовалюта.\n\n"
             f"{price_note}"
         )
