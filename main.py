@@ -111,6 +111,13 @@ PROBLEM_USERS = {}        # user_id -> {"kind": str, "step": str, "query": str, 
 ABANDONED_STAFF_NOTIFIED = set()  # user_id для которых уже отправлено уведомление о неоплаченном заказе
 BACK_AFTER_SERVICE_NOTIFIED = set()  # (user_id, service_name) — чтобы не дублировать при повторных «Назад»
 
+# Трекинг этапа выбора способа оплаты (строго одно уведомление за заход на этап)
+PAYMENT_STAGE_IDLE_SECONDS = 15 * 60
+PAYMENT_CYCLE_COUNTER = 0
+USER_PAYMENT_CYCLE = {}     # user_id -> int (текущий цикл захода на этап выбора способа оплаты)
+PAYMENT_STAGE_TIMERS = {}   # user_id -> asyncio.Task (15 минут бездействия на этапе выбора способа оплаты)
+PAYMENT_STAGE_NOTIFIED = set()  # (user_id, cycle_id) — уже отправлено уведомление в рамках данного захода
+
 DB_POOL = None
 DB_WRITE_QUEUE = None
 BOT_INSTANCE: Bot | None = None
@@ -397,6 +404,147 @@ def _has_active_unpaid_item(user_id: int) -> bool:
     return False
 
 
+# === СТРОГО ОДНО УВЕДОМЛЕНИЕ НА ЭТАПЕ ВЫБОРА СПОСОБА ОПЛАТЫ ===
+def _cancel_payment_stage_timer(user_id: int):
+    task = PAYMENT_STAGE_TIMERS.pop(user_id, None)
+    if task:
+        task.cancel()
+
+
+def _reset_payment_stage_tracking(user_id: int):
+    _cancel_payment_stage_timer(user_id)
+    USER_PAYMENT_CYCLE.pop(user_id, None)
+    for key in [k for k in PAYMENT_STAGE_NOTIFIED if k[0] == user_id]:
+        PAYMENT_STAGE_NOTIFIED.discard(key)
+
+
+async def _notify_staff_payment_stage_once(
+    bot: Bot,
+    user_id: int,
+    cycle_id: int,
+    reason_text: str,
+    username: str | None = None,
+    extra_data: dict | None = None,
+):
+    if user_id in BANNED_USERS:
+        return
+    if USER_PAYMENT_CYCLE.get(user_id) != cycle_id:
+        return
+    key = (user_id, cycle_id)
+    if key in PAYMENT_STAGE_NOTIFIED:
+        return
+    PAYMENT_STAGE_NOTIFIED.add(key)
+    _cancel_payment_stage_timer(user_id)
+
+    prof = USER_PROFILES.get(user_id, {})
+    uname = username or prof.get("username")
+    user_tag = f"@{uname}" if uname else "без @username"
+
+    bill = USER_BILLS.get(user_id) or {}
+    extra = dict(extra_data or {})
+    if not extra.get("service_name"):
+        extra["service_name"] = bill.get("service_name") or prof.get("last_service")
+    if not extra.get("total_price"):
+        extra["total_price"] = bill.get("total_price")
+    if not extra.get("country"):
+        extra["country"] = bill.get("country") or USER_LAST_COUNTRY.get(user_id)
+
+    _record_problem_user(
+        user_id=user_id,
+        kind="unpaid_checkout",
+        step_label=STEP_LABELS["payment_method"],
+        query_text=reason_text,
+        data=extra,
+    )
+
+    body = (
+        f"• Клиент: {user_tag} (ID: <code>{user_id}</code>)\n"
+        f"• Этап: <b>Выбор способа оплаты</b>\n"
+        f"• Причина: <b>{reason_text}</b>\n"
+        "• Статус: <b>Не оплачен</b>"
+    )
+    await _send_staff_ticket_menu(
+        bot=bot,
+        user_id=user_id,
+        kind="unpaid_checkout",
+        header_title="⚠️ <b>Неоплаченный заказ — требуется ведение клиента</b>",
+        body_text=body,
+        extra_data=extra,
+    )
+
+
+async def _payment_stage_idle_worker(bot: Bot, user_id: int, cycle_id: int):
+    try:
+        await asyncio.sleep(PAYMENT_STAGE_IDLE_SECONDS)
+        if user_id in BANNED_USERS:
+            return
+        if USER_PAYMENT_CYCLE.get(user_id) != cycle_id:
+            return
+        if (user_id, cycle_id) in PAYMENT_STAGE_NOTIFIED:
+            return
+        prof = USER_PROFILES.get(user_id, {})
+        await _notify_staff_payment_stage_once(
+            bot=bot,
+            user_id=user_id,
+            cycle_id=cycle_id,
+            reason_text="15 минут бездействия на этапе выбора способа оплаты",
+            username=prof.get("username"),
+        )
+    except asyncio.CancelledError:
+        pass
+
+
+def _arm_payment_stage_cycle(bot: Bot, user_id: int, username: str | None = None):
+    global PAYMENT_CYCLE_COUNTER
+    if user_id in BANNED_USERS:
+        return
+    _cancel_payment_stage_timer(user_id)
+    PAYMENT_CYCLE_COUNTER += 1
+    cycle_id = PAYMENT_CYCLE_COUNTER
+    USER_PAYMENT_CYCLE[user_id] = cycle_id
+    _touch_user_activity(user_id, username)
+    PAYMENT_STAGE_TIMERS[user_id] = asyncio.create_task(
+        _payment_stage_idle_worker(bot, user_id, cycle_id)
+    )
+
+
+def _refresh_payment_stage_idle_timer(bot: Bot, user_id: int, username: str | None = None):
+    if user_id in BANNED_USERS:
+        return
+    cycle_id = USER_PAYMENT_CYCLE.get(user_id)
+    if cycle_id is None:
+        _arm_payment_stage_cycle(bot, user_id, username)
+        return
+    if (user_id, cycle_id) in PAYMENT_STAGE_NOTIFIED:
+        return
+    _cancel_payment_stage_timer(user_id)
+    _touch_user_activity(user_id, username)
+    PAYMENT_STAGE_TIMERS[user_id] = asyncio.create_task(
+        _payment_stage_idle_worker(bot, user_id, cycle_id)
+    )
+
+
+async def _trigger_payment_stage_back_if_needed(
+    bot: Bot,
+    user_id: int,
+    username: str | None,
+    data: dict,
+):
+    cycle_id = USER_PAYMENT_CYCLE.get(user_id)
+    if cycle_id is None:
+        return
+    if (user_id, cycle_id) in PAYMENT_STAGE_NOTIFIED:
+        return
+    await _notify_staff_payment_stage_once(
+        bot=bot,
+        user_id=user_id,
+        cycle_id=cycle_id,
+        reason_text="Нажал «Назад» на этапе выбора способа оплаты",
+        username=username,
+        extra_data=data,
+    )
+
+
 # === АВТОЗАКРЫТИЕ ОБРАЩЕНИЯ У КЛИЕНТА ЧЕРЕЗ 1 ЧАС ===
 def _cancel_dialog_timer(user_id: int):
     dlg = ACTIVE_DIALOGS.get(user_id)
@@ -582,6 +730,7 @@ async def _issue_bill_to_client(
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
     queue_db(("abandoned_set", target_user_id, remind_at))
     _schedule_abandoned_reminder(bot, target_user_id, remind_at)
+    _arm_payment_stage_cycle(bot, target_user_id)
 
     sent_bill = None
     last_err = ""
@@ -920,86 +1069,6 @@ async def _send_staff_ticket_menu(
             TICKETS[tid]["staff_msgs"][staff_id] = sent.message_id
         except Exception as e:
             logger.error(f"Ошибка отправки карточки обращения #{tid} сотруднику {staff_id}: {e}")
-
-
-# === УВЕДОМЛЕНИЕ МЕНЕДЖЕРУ ПРИ ВОЗВРАТЕ НАЗАД ПОСЛЕ ВЫБОРА УСЛУГИ ===
-def _detect_back_step_label(current_state: str | None, data: dict) -> str:
-    state_to_key = {
-        OrderForm.debt_info.state: "debt_info",
-        OrderForm.debt_wallet.state: "debt_wallet",
-        OrderForm.special_task.state: "special_task",
-        OrderForm.country.state: "country",
-        OrderForm.target_location.state: "target_location",
-        OrderForm.target_data.state: "target_data",
-        OrderForm.photos.state: "photos",
-        OrderForm.urgency.state: "urgency",
-        OrderForm.receipt.state: "receipt",
-    }
-    if current_state in state_to_key:
-        return STEP_LABELS[state_to_key[current_state]]
-    if data.get("total_price") is not None or data.get("urgency"):
-        return STEP_LABELS["summary"]
-    if data.get("payment_method"):
-        return STEP_LABELS["payment_method"]
-    return STEP_LABELS["payment"]
-
-
-async def _notify_staff_back_after_service(
-    bot: Bot,
-    user_id: int,
-    username: str | None,
-    current_state: str | None,
-    data: dict,
-):
-    if user_id in BANNED_USERS:
-        return
-
-    service_name = (data.get("service_name") or "").strip()
-    if not service_name:
-        return
-
-    # Уведомляем только если клиент уже выбрал услугу в каталоге и нажимает «Назад» на шагах после выбора услуги
-    if current_state in (OrderForm.debt_info.state, OrderForm.special_task.state):
-        return
-
-    notify_key = (user_id, service_name)
-    if notify_key in BACK_AFTER_SERVICE_NOTIFIED:
-        return
-    BACK_AFTER_SERVICE_NOTIFIED.add(notify_key)
-
-    _touch_user_activity(user_id, username)
-    step_label = _detect_back_step_label(current_state, data)
-    user_tag = f"@{username}" if username else "без @username"
-
-    extra = dict(data or {})
-    extra["service_name"] = service_name
-
-    _record_problem_user(
-        user_id=user_id,
-        kind="unpaid_checkout",
-        step_label=step_label,
-        query_text=f"Нажал «Назад» на этапе: {step_label}",
-        data=extra,
-    )
-
-    price_val = extra.get("total_price") or extra.get("service_price")
-    price_line = f"\n• Сумма: <b>{price_val}$</b>" if price_val and int(price_val) > 0 else ""
-
-    body = (
-        f"• Клиент: {user_tag} (ID: <code>{user_id}</code>)\n"
-        f"• Выбранная услуга: <b>{service_name}</b>{price_line}\n"
-        f"• Нажал <b>«Назад»</b> на этапе: <b>{step_label}</b>\n"
-        f"• Статус: <b>Не оплачен</b>"
-    )
-
-    await _send_staff_ticket_menu(
-        bot=bot,
-        user_id=user_id,
-        kind="unpaid_checkout",
-        header_title="⚠️ <b>Неоплаченный заказ — клиент нажал «Назад»</b>",
-        body_text=body,
-        extra_data=extra,
-    )
 
 
 # === POSTGRESQL СЛОЙ ===
@@ -1883,6 +1952,7 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
     user_id = event.from_user.id
     if user_id in BANNED_USERS:
         return
+    _reset_payment_stage_tracking(user_id)
     _clear_back_after_service_flags(user_id)
     _touch_user_activity(user_id, event.from_user.username)
 
@@ -2169,15 +2239,15 @@ async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     service_name = data.get("service_name") or ""
 
-    asyncio.create_task(
-        _notify_staff_back_after_service(
-            bot=callback.bot,
-            user_id=callback.from_user.id,
-            username=callback.from_user.username,
-            current_state=current_state,
-            data=data,
+    if current_state == OrderForm.receipt.state:
+        asyncio.create_task(
+            _trigger_payment_stage_back_if_needed(
+                bot=callback.bot,
+                user_id=callback.from_user.id,
+                username=callback.from_user.username,
+                data=data,
+            )
         )
-    )
 
     if current_state == OrderForm.debt_info.state:
         await state.set_state(OrderForm.service)
@@ -2235,6 +2305,7 @@ async def cmd_ban_user(message: Message, state: FSMContext):
         BANNED_USERS.add(user_id)
         queue_db(("ban_add", user_id))
         _cancel_abandoned_reminder(user_id)
+        _reset_payment_stage_tracking(user_id)
         _clear_back_after_service_flags(user_id)
         _close_dialog_state(user_id)
         USER_LAST_BROADCAST.pop(user_id, None)
@@ -2311,6 +2382,7 @@ async def _set_order_status_and_notify(
 
     if "выполнен" in new_status.lower():
         _cancel_abandoned_reminder(target_user_id)
+        _reset_payment_stage_tracking(target_user_id)
         _clear_back_after_service_flags(target_user_id)
         USER_BILLS.pop(target_user_id, None)
         queue_db(("bill_delete", target_user_id))
@@ -3707,8 +3779,6 @@ async def delayed_abandoned_cart_reminder(
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
-
-        await _notify_staff_unpaid_checkout(bot, user_id)
     except asyncio.CancelledError:
         pass
 
@@ -3800,8 +3870,16 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
 @router.callback_query(F.data == "back_home")
 async def back_home(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    if _has_active_unpaid_item(user_id):
-        asyncio.create_task(_notify_staff_unpaid_checkout(callback.bot, user_id))
+    data = await state.get_data()
+    if USER_PAYMENT_CYCLE.get(user_id) is not None:
+        asyncio.create_task(
+            _trigger_payment_stage_back_if_needed(
+                bot=callback.bot,
+                user_id=user_id,
+                username=callback.from_user.username,
+                data=data,
+            )
+        )
     _cancel_abandoned_reminder(user_id)
     await show_main_menu(callback, state)
 
@@ -3994,6 +4072,7 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     _track_user_step(user_id, "catalog", callback.from_user.username)
     _cancel_abandoned_reminder(user_id)
+    _reset_payment_stage_tracking(user_id)
 
     await state.set_state(OrderForm.service)
     text = (
@@ -4289,6 +4368,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
     if service_name.lower() == "особый заказ" and user_id not in USER_BILLS:
         _cancel_abandoned_reminder(user_id)
+        _reset_payment_stage_tracking(user_id)
         _clear_back_after_service_flags(user_id)
         _track_user_step(user_id, "paid", callback.from_user.username, service_name=service_name)
         _record_problem_user(
@@ -4367,6 +4447,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
     queue_db(("abandoned_set", user_id, remind_at))
     _schedule_abandoned_reminder(callback.bot, user_id, remind_at)
+    _arm_payment_stage_cycle(callback.bot, user_id, callback.from_user.username)
 
     rate = await get_exchange_rate(curr_code)
     local_amount = round(total_price * rate) if total_price > 0 else 0
@@ -4438,6 +4519,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "pay_card_option")
 async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
     _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, callback.from_user.id, callback.from_user.username)
     await state.update_data(payment_method="card")
     _, country, curr_code, curr_symbol, total_price, _ = (
         await get_payment_context(callback.from_user.id, state)
@@ -4520,6 +4602,7 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
 async def process_payment_help_manager(callback: CallbackQuery, state: FSMContext):
     user = callback.from_user
     _touch_user_activity(user.id, user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, user.id, user.username)
     data = await state.get_data()
     _record_problem_user(
         user_id=user.id,
@@ -4549,6 +4632,7 @@ async def process_payment_help_manager(callback: CallbackQuery, state: FSMContex
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, callback.from_user.id, callback.from_user.username)
     _, _, _, _, total_price, _ = await get_payment_context(
         callback.from_user.id, state
     )
@@ -4605,6 +4689,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
     user = callback.from_user
     _cancel_abandoned_reminder(user.id)
+    _reset_payment_stage_tracking(user.id)
     _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     _track_user_step(user.id, "paid", user.username, service_name=service_desc)
@@ -4675,6 +4760,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "crypto_expert")
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
     _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, callback.from_user.id, callback.from_user.username)
     await state.update_data(payment_method="crypto")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -4720,6 +4806,7 @@ async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("pay_crypto_"))
 async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
     _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, callback.from_user.id, callback.from_user.username)
     await state.update_data(payment_method="crypto")
     net_key = callback.data.split("_")[2]
     net_info = CRYPTO_NETWORKS.get(net_key)
@@ -4802,13 +4889,14 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
     _track_user_step(callback.from_user.id, "receipt", callback.from_user.username)
+    _refresh_payment_stage_idle_timer(callback.bot, callback.from_user.id, callback.from_user.username)
     data = await state.get_data()
     payment_method = data.get("payment_method", "card")
     await state.set_state(OrderForm.receipt)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
-                text="⬅️ Назад", callback_data="go_to_payment", style="primary"
+                text="⬅️ Назад", callback_data="order_back_step", style="primary"
             )
         ]]
     )
@@ -4828,6 +4916,7 @@ async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
 async def process_receipt_photo(message: Message, state: FSMContext):
     user = message.from_user
     _cancel_abandoned_reminder(user.id)
+    _reset_payment_stage_tracking(user.id)
     _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     data, country, _, _, total_price, service_desc = await get_payment_context(
@@ -4913,6 +5002,7 @@ async def process_receipt_document(message: Message, state: FSMContext):
 
     user = message.from_user
     _cancel_abandoned_reminder(user.id)
+    _reset_payment_stage_tracking(user.id)
     _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     data, country, _, _, total_price, service_desc = await get_payment_context(
