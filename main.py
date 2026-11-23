@@ -273,6 +273,22 @@ def find_forbidden_requisites_for_manager(text: str) -> str | None:
     return None
 
 
+def _resolve_target_user_id(raw_target: str) -> int | None:
+    cleaned = raw_target.strip()
+    if not cleaned:
+        return None
+    if cleaned.isdigit():
+        return int(cleaned)
+    uname = cleaned.lstrip("@").strip().lower()
+    if not uname:
+        return None
+    for uid, prof in USER_PROFILES.items():
+        prof_uname = (prof.get("username") or "").strip().lower()
+        if prof_uname and prof_uname == uname:
+            return int(uid)
+    return None
+
+
 def _schedule_abandoned_reminder(bot: Bot, user_id: int, remind_at: datetime.datetime):
     old_task = ABANDONED_CHECKOUTS.pop(user_id, None)
     if old_task:
@@ -1484,33 +1500,41 @@ async def cmd_bill_user(message: Message, state: FSMContext):
     if not is_staff(message.from_user.id):
         return
 
-    if is_manager(message.from_user.id) and not is_admin(message.from_user.id):
-        forbidden = find_forbidden_requisites_for_manager(message.text or "")
-        if forbidden:
-            await message.reply(
-                f"🚫 Отправка запрещена: обнаружен {forbidden}. Менеджеру нельзя передавать адреса криптокошельков, номера карт и номера телефонов."
-            )
-            return
-
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.reply(
-            "❌ Использование: `/bill <user_id> <услуга> <сумма$>`\nПример: `/bill"
+            "❌ Использование: `/bill <user_id или @username> <услуга> <сумма$>`\nПример: `/bill"
             " 282810030 особый заказ 220$`",
             parse_mode="Markdown",
         )
         return
 
     parts = args[1].strip().split()
-    if len(parts) < 2 or not parts[0].isdigit():
+    if len(parts) < 2:
         await message.reply(
-            "❌ Укажите корректный числовой `user_id`, название услуги и сумму.\nПример:"
+            "❌ Укажите корректный `user_id` или `@username`, название услуги и сумму.\nПример:"
             " `/bill 282810030 особый заказ 220$`",
             parse_mode="Markdown",
         )
         return
 
-    target_user_id = int(parts[0])
+    if is_manager(message.from_user.id) and not is_admin(message.from_user.id):
+        bill_body_text = " ".join(parts[1:])
+        forbidden = find_forbidden_requisites_for_manager(bill_body_text)
+        if forbidden:
+            await message.reply(
+                f"🚫 Отправка запрещена: обнаружен {forbidden}. Менеджеру нельзя передавать адреса криптокошельков, номера карт и номера телефонов."
+            )
+            return
+
+    target_user_id = _resolve_target_user_id(parts[0])
+    if target_user_id is None:
+        await message.reply(
+            "❌ Укажите корректный числовой `user_id` или известный боту `@username` клиента.",
+            parse_mode="Markdown",
+        )
+        return
+
     raw_amount = (
         parts[-1]
         .replace("$", "")
@@ -1649,15 +1673,17 @@ async def cmd_send_to_user(message: Message):
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
         await message.reply(
-            "❌ Использование: `/send <user_id> <текст сообщения>`",
+            "❌ Использование: `/send <user_id или @username> <текст сообщения>`",
             parse_mode="Markdown",
         )
         return
-    target_id_str = args[1].strip()
+    target_raw = args[1].strip()
     text_to_send = args[2].strip()
-    if not target_id_str.isdigit():
+    target_user_id = _resolve_target_user_id(target_raw)
+    if target_user_id is None:
         await message.reply(
-            "❌ Укажите корректный числовой ID пользователя.", parse_mode="Markdown"
+            "❌ Укажите корректный числовой ID или известный боту `@username` пользователя.",
+            parse_mode="Markdown",
         )
         return
 
@@ -1669,7 +1695,6 @@ async def cmd_send_to_user(message: Message):
             )
             return
 
-    target_user_id = int(target_id_str)
     ok, err_text = await _deliver_send_message_to_client(
         message.bot,
         target_user_id=target_user_id,
