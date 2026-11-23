@@ -308,7 +308,7 @@ def _cancel_abandoned_reminder(user_id: int):
     queue_db(("abandoned_delete", user_id))
 
 
-# === АВТОЗАКРЫТИЕ ОБРАЩЕНИЯ /send ЧЕРЕЗ 1 ЧАС ===
+# === АВТОЗАКРЫТИЕ ОБРАЩЕНИЯ У КЛИЕНТА ЧЕРЕЗ 1 ЧАС ===
 def _cancel_dialog_timer(user_id: int):
     dlg = ACTIVE_DIALOGS.get(user_id)
     if dlg and dlg.get("task"):
@@ -379,6 +379,7 @@ async def _deliver_send_message_to_client(
     target_user_id: int,
     text_to_send: str,
     prefix: str = "💬 <b>Сообщение от менеджера:</b>",
+    staff_id: int | None = None,
 ) -> tuple[bool, str]:
     payload = f"{prefix}\n\n{text_to_send}"
     keyboard = _build_client_send_keyboard()
@@ -389,10 +390,10 @@ async def _deliver_send_message_to_client(
             reply_markup=keyboard,
             parse_mode="HTML",
         )
-        _arm_dialog_timer(bot, target_user_id)
+        _arm_dialog_timer(bot, target_user_id, staff_id=staff_id)
         return True, ""
     except Exception as first_err:
-        logger.warning(f"Повторная попытка /send для {target_user_id} после ошибки: {first_err}")
+        logger.warning(f"Повторная попытка отправки клиенту {target_user_id} после ошибки: {first_err}")
         await asyncio.sleep(0.4)
         try:
             await bot.send_message(
@@ -401,13 +402,13 @@ async def _deliver_send_message_to_client(
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
-            _arm_dialog_timer(bot, target_user_id)
+            _arm_dialog_timer(bot, target_user_id, staff_id=staff_id)
             return True, ""
         except Exception as second_err:
             return False, str(second_err)
 
 
-# === МЕНЮШКИ ОБРАЩЕНИЙ ДЛЯ МЕНЕДЖЕРА / АДМИНА ===
+# === МЕНЮШКИ ОБРАЩЕНИЙ И ЗАКАЗОВ ДЛЯ МЕНЕДЖЕРА / АДМИНА ===
 def _register_ticket(user_id: int, kind: str) -> int:
     global TICKET_COUNTER
     TICKET_COUNTER += 1
@@ -442,6 +443,35 @@ def _build_ticket_keyboard(ticket_id: int, closed: bool = False) -> InlineKeyboa
                 InlineKeyboardButton(
                     text="🔒 Закрыть обращение",
                     callback_data=f"tkt_close_{ticket_id}",
+                    style="danger",
+                ),
+            ]
+        ]
+    )
+
+
+def _build_paid_order_keyboard(
+    user_id: int,
+    order_index: int | None = None,
+    in_work: bool = False,
+) -> InlineKeyboardMarkup:
+    work_cb = (
+        f"order_work_{user_id}_{order_index}"
+        if order_index is not None
+        else f"order_work_{user_id}"
+    )
+    work_text = "⚙️ В работе ✓" if in_work else "⚙️ В работе"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать клиенту",
+                    callback_data=f"order_msg_{user_id}",
+                    style="primary",
+                ),
+                InlineKeyboardButton(
+                    text=work_text,
+                    callback_data=work_cb,
                     style="danger",
                 ),
             ]
@@ -796,6 +826,18 @@ async def _exec_db_action(action: tuple):
                         "UPDATE user_orders SET status = $1 WHERE id = $2",
                         status,
                         row["id"],
+                    )
+            elif kind == "order_set_index_status":
+                _, user_id, order_idx, status = action
+                rows = await conn.fetch(
+                    "SELECT id FROM user_orders WHERE user_id = $1 ORDER BY id ASC",
+                    user_id,
+                )
+                if 0 <= order_idx < len(rows):
+                    await conn.execute(
+                        "UPDATE user_orders SET status = $1 WHERE id = $2",
+                        status,
+                        rows[order_idx]["id"],
                     )
             elif kind == "bill_set":
                 _, user_id, bill_data = action
@@ -1700,6 +1742,7 @@ async def cmd_send_to_user(message: Message):
         target_user_id=target_user_id,
         text_to_send=text_to_send,
         prefix="💬 <b>Сообщение от менеджера:</b>",
+        staff_id=message.from_user.id,
     )
     if ok:
         await message.reply(
@@ -1710,7 +1753,7 @@ async def cmd_send_to_user(message: Message):
         await message.reply(f"❌ Не удалось отправить сообщение: {err_text}")
 
 
-# === КЛИЕНТСКИЕ КНОПКИ ПОД СООБЩЕНИЕМ ОТ МЕНЕДЖЕРА (/send) ===
+# === КЛИЕНТСКИЕ КНОПКИ ПОД СООБЩЕНИЕМ ОТ МЕНЕДЖЕРА ===
 @router.callback_query(F.data == "client_reply_manager")
 async def cb_client_reply_manager(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -1781,7 +1824,7 @@ async def process_client_reply_to_manager(message: Message, state: FSMContext):
         bot=message.bot,
         user_id=user.id,
         kind="send_reply",
-        header_title="↩️ <b>Ответ клиента по диалогу /send</b>",
+        header_title="↩️ <b>Ответ клиента по обращению</b>",
         body_text=body,
         photo_id=photo_id,
     )
@@ -1793,7 +1836,7 @@ async def process_client_reply_to_manager(message: Message, state: FSMContext):
     )
 
 
-# === ОБРАБОТЧИКИ МЕНЮШЕК ОБРАЩЕНИЙ У МЕНЕДЖЕРА / АДМИНА ===
+# === ОБРАБОТЧИКИ МЕНЮШЕК ОБРАЩЕНИЙ И ЗАКАЗОВ У МЕНЕДЖЕРА / АДМИНА ===
 @router.callback_query(F.data.startswith("tkt_noop_"))
 async def cb_ticket_noop(callback: CallbackQuery):
     await callback.answer("🔒 Обращение уже закрыто", show_alert=False)
@@ -1868,6 +1911,83 @@ async def cb_ticket_reply(callback: CallbackQuery, state: FSMContext):
     )
 
 
+@router.callback_query(F.data.startswith("order_msg_"))
+async def cb_order_message_client(callback: CallbackQuery, state: FSMContext):
+    if not is_staff(callback.from_user.id):
+        await callback.answer("⛔ Недостаточно прав", show_alert=True)
+        return
+    try:
+        target_user_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    await callback.answer()
+    await state.set_state(StaffDirectForm.waiting_reply)
+    await state.update_data(reply_target_user_id=target_user_id, reply_ticket_id=None)
+    await callback.message.answer(
+        f"✍️ Введите сообщение клиенту по заказу (ID: <code>{target_user_id}</code>):",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("order_work_"))
+async def cb_order_set_in_work(callback: CallbackQuery):
+    if not is_staff(callback.from_user.id):
+        await callback.answer("⛔ Недостаточно прав", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    try:
+        target_user_id = int(parts[2])
+        order_idx = int(parts[3]) if len(parts) > 3 else None
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    orders = USER_ORDERS.get(target_user_id, [])
+    new_status = "⚙️ В работе"
+    service_title = "Ваш заказ"
+
+    if orders:
+        if order_idx is not None and 0 <= order_idx < len(orders):
+            orders[order_idx]["status"] = new_status
+            service_title = orders[order_idx].get("service_name") or service_title
+            queue_db(("order_set_index_status", target_user_id, order_idx, new_status))
+        else:
+            orders[-1]["status"] = new_status
+            service_title = orders[-1].get("service_name") or service_title
+            queue_db(("order_set_last_status", target_user_id, new_status))
+    else:
+        bill = USER_BILLS.get(target_user_id) or {}
+        if bill.get("service_name"):
+            service_title = bill["service_name"]
+
+    try:
+        await callback.bot.send_message(
+            chat_id=target_user_id,
+            text=(
+                "⚙️ <b>Ваш заказ переведен в статус «В работе»!</b>\n\n"
+                f"• Заказ / услуга: <b>{service_title}</b>\n"
+                "• Статус: <b>В работе</b>"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=_build_paid_order_keyboard(
+                target_user_id, order_index=order_idx, in_work=True
+            )
+        )
+    except Exception:
+        pass
+
+    await callback.answer("⚙️ Статус заказа обновлен: В работе", show_alert=True)
+
+
 @router.message(StaffDirectForm.waiting_reply, F.text)
 async def process_staff_direct_reply(message: Message, state: FSMContext):
     if not is_staff(message.from_user.id):
@@ -1902,6 +2022,7 @@ async def process_staff_direct_reply(message: Message, state: FSMContext):
         target_user_id=int(target_user_id),
         text_to_send=text_to_send,
         prefix=prefix,
+        staff_id=message.from_user.id,
     )
     if ok:
         await message.reply(
@@ -1951,6 +2072,7 @@ async def admin_reply_handler(message: Message):
             target_user_id=target_user_id,
             text_to_send=(message.text or "").strip(),
             prefix=prefix,
+            staff_id=message.from_user.id,
         )
         if ok:
             await message.reply("✅ Ответ успешно отправлен клиенту.")
@@ -3109,31 +3231,43 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         if data.get("urgency"):
             extra_info += f"\n• Срочность: {data.get('urgency')}"
         target_photos = data.get("photos") or []
-        first_photo = target_photos[0] if target_photos else None
+        order_kb = _build_paid_order_keyboard(user.id, order_index=None, in_work=False)
 
-        await _send_staff_ticket_menu(
-            bot=callback.bot,
-            user_id=user.id,
-            kind="special_order",
-            header_title=f"🎯 <b>Новый особый заказ от {user_tag} (ID: <code>{user.id}</code>)</b>",
-            body_text=extra_info.lstrip("\n"),
-            extra_data=data,
-            photo_id=first_photo,
-        )
-        for p_id in target_photos[1:]:
-            for staff_id in get_staff_recipients():
-                try:
+        for staff_id in get_staff_recipients():
+            try:
+                if target_photos:
                     await callback.bot.send_photo(
                         chat_id=staff_id,
-                        photo=p_id,
+                        photo=target_photos[0],
                         caption=(
-                            f"📸 Доп. фото цели по особому заказу от {user_tag} (ID:"
-                            f" <code>{user.id}</code>)"
+                            f"🎯 <b>Новый особый заказ от {user_tag} (ID:"
+                            f" <code>{user.id}</code>)</b>{extra_info}"
                         ),
+                        reply_markup=order_kb,
                         parse_mode="HTML",
                     )
-                except Exception:
-                    pass
+                    for p_id in target_photos[1:]:
+                        await callback.bot.send_photo(
+                            chat_id=staff_id,
+                            photo=p_id,
+                            caption=(
+                                f"📸 Доп. фото цели по особому заказу от {user_tag} (ID:"
+                                f" <code>{user.id}</code>)"
+                            ),
+                            parse_mode="HTML",
+                        )
+                else:
+                    await callback.bot.send_message(
+                        chat_id=staff_id,
+                        text=(
+                            f"🎯 <b>Новый особый заказ от {user_tag} (ID:"
+                            f" <code>{user.id}</code>)</b>{extra_info}"
+                        ),
+                        reply_markup=order_kb,
+                        parse_mode="HTML",
+                    )
+            except Exception:
+                pass
 
         text = (
             "✅ <b>Заявка принята!</b>\n\nМенеджер свяжется с вами в течение 25"
@@ -3389,6 +3523,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
     if user.id not in USER_ORDERS:
         USER_ORDERS[user.id] = []
 
+    order_idx = len(USER_ORDERS[user.id])
     USER_ORDERS[user.id].append({
         "service_name": service_desc,
         "total_price": total_price,
@@ -3413,11 +3548,15 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
         f" <code>{user.id}</code>){order_details}"
     )
     target_photos = data.get("photos") or []
+    order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
 
     for staff_id in get_staff_recipients():
         try:
             await callback.bot.send_message(
-                chat_id=staff_id, text=staff_text, parse_mode="HTML"
+                chat_id=staff_id,
+                text=staff_text,
+                reply_markup=order_kb,
+                parse_mode="HTML",
             )
             for p_id in target_photos:
                 await callback.bot.send_photo(
@@ -3608,6 +3747,7 @@ async def process_receipt_photo(message: Message, state: FSMContext):
     if user.id not in USER_ORDERS:
         USER_ORDERS[user.id] = []
 
+    order_idx = len(USER_ORDERS[user.id])
     USER_ORDERS[user.id].append({
         "service_name": service_desc,
         "total_price": total_price,
@@ -3632,6 +3772,7 @@ async def process_receipt_photo(message: Message, state: FSMContext):
         f" <code>{user.id}</code>){order_details}"
     )
     target_photos = data.get("photos") or []
+    order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
 
     for staff_id in get_staff_recipients():
         try:
@@ -3639,6 +3780,7 @@ async def process_receipt_photo(message: Message, state: FSMContext):
                 chat_id=staff_id,
                 photo=message.photo[-1].file_id,
                 caption=receipt_caption,
+                reply_markup=order_kb,
                 parse_mode="HTML",
             )
             for p_id in target_photos:
@@ -3688,6 +3830,7 @@ async def process_receipt_document(message: Message, state: FSMContext):
     if user.id not in USER_ORDERS:
         USER_ORDERS[user.id] = []
 
+    order_idx = len(USER_ORDERS[user.id])
     USER_ORDERS[user.id].append({
         "service_name": service_desc,
         "total_price": total_price,
@@ -3712,6 +3855,7 @@ async def process_receipt_document(message: Message, state: FSMContext):
         f" <code>{user.id}</code>){order_details}"
     )
     target_photos = data.get("photos") or []
+    order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
 
     for staff_id in get_staff_recipients():
         try:
@@ -3719,6 +3863,7 @@ async def process_receipt_document(message: Message, state: FSMContext):
                 chat_id=staff_id,
                 document=message.document.file_id,
                 caption=receipt_caption,
+                reply_markup=order_kb,
                 parse_mode="HTML",
             )
             for p_id in target_photos:
