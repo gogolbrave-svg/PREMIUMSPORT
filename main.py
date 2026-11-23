@@ -2146,8 +2146,9 @@ async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
         else "<b>Рассчитывается менеджером</b>"
     )
 
-    is_special = (data.get("service_name") or "").lower() == "особый заказ"
-    payment_btn_text = "✅ Отправить заявку" if is_special else "💳 Перейти к оплате"
+    is_special = (data.get("service_name") or "").strip().lower() == "особый заказ"
+    action_btn_text = "✅ Отправить заявку" if is_special else "💳 Перейти к оплате"
+    action_callback = "submit_special_order" if is_special else "go_to_payment"
 
     summary_text = (
         "✨ <b>Сводка заказа:</b>\n\n"
@@ -2160,8 +2161,8 @@ async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=payment_btn_text,
-                    callback_data="go_to_payment",
+                    text=action_btn_text,
+                    callback_data=action_callback,
                     style="danger",
                 )
             ],
@@ -4297,6 +4298,107 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
     await _show_summary_step(callback, state)
 
 
+@router.callback_query(F.data == "submit_special_order")
+async def process_special_order_submit(callback: CallbackQuery, state: FSMContext):
+    user = callback.from_user
+    user_id = user.id
+    data = await state.get_data()
+    service_name = data.get("service_name") or "Особый заказ"
+
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _cancel_abandoned_reminder(user_id)
+    _clear_back_after_service_flags(user_id)
+    USER_BILLS.pop(user_id, None)
+    queue_db(("bill_delete", user_id))
+    _track_user_step(user_id, "paid", user.username, service_name=service_name)
+    _record_problem_user(
+        user_id=user_id,
+        kind="special_order",
+        step_label=STEP_LABELS["paid"],
+        query_text=data.get("special_task") or service_name,
+        data=data,
+    )
+
+    if user_id not in USER_ORDERS:
+        USER_ORDERS[user_id] = []
+    order_idx = len(USER_ORDERS[user_id])
+    USER_ORDERS[user_id].append({
+        "service_name": service_name,
+        "total_price": 0,
+        "status": "🧮 Заявка на расчет",
+    })
+    queue_db((
+        "order_add",
+        user_id,
+        service_name,
+        0,
+        "🧮 Заявка на расчет",
+    ))
+
+    user_tag = f"@{user.username}" if user.username else "без @username"
+    extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
+    if data.get("country"):
+        extra_info += f"\n• Страна: {data.get('country')}"
+    if data.get("target_location"):
+        extra_info += f"\n• Локация: {data.get('target_location')}"
+    if data.get("target_data"):
+        extra_info += f"\n• Данные цели: {data.get('target_data')}"
+    if data.get("urgency"):
+        extra_info += f"\n• Срочность: {data.get('urgency')}"
+    target_photos = data.get("photos") or []
+    order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
+
+    for staff_id in get_staff_recipients():
+        try:
+            if target_photos:
+                await callback.bot.send_photo(
+                    chat_id=staff_id,
+                    photo=target_photos[0],
+                    caption=(
+                        f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
+                        f" <code>{user.id}</code>)</b>{extra_info}"
+                    ),
+                    reply_markup=order_kb,
+                    parse_mode="HTML",
+                )
+                for p_id in target_photos[1:]:
+                    await callback.bot.send_photo(
+                        chat_id=staff_id,
+                        photo=p_id,
+                        caption=(
+                            f"📸 Доп. фото цели по особому заказу от {user_tag} (ID:"
+                            f" <code>{user.id}</code>)"
+                        ),
+                        parse_mode="HTML",
+                    )
+            else:
+                await callback.bot.send_message(
+                    chat_id=staff_id,
+                    text=(
+                        f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
+                        f" <code>{user.id}</code>)</b>{extra_info}"
+                    ),
+                    reply_markup=order_kb,
+                    parse_mode="HTML",
+                )
+        except Exception:
+            pass
+
+    text = (
+        "✅ <b>Заявка отправлена менеджеру!</b>\n\nОн свяжется с вами в течение 25 минут"
+        " для расчета стоимости."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🏠 На главную", callback_data="back_home", style="danger"
+            )
+        ]]
+    )
+    await render_step(callback, state, "main.jpg", text, keyboard)
+    await state.clear()
+
+
 @router.callback_query(F.data == "go_to_payment")
 async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -4305,100 +4407,8 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         await get_payment_context(user_id, state)
     )
 
-    if service_name.lower() == "особый заказ" and user_id not in USER_BILLS:
-        _reset_payment_step_tracking(user_id, leave_step=True)
-        _cancel_abandoned_reminder(user_id)
-        _clear_back_after_service_flags(user_id)
-        USER_BILLS.pop(user_id, None)
-        queue_db(("bill_delete", user_id))
-        _track_user_step(user_id, "paid", callback.from_user.username, service_name=service_name)
-        _record_problem_user(
-            user_id=user_id,
-            kind="special_order",
-            step_label=STEP_LABELS["paid"],
-            query_text=data.get("special_task") or service_name,
-            data=data,
-        )
-
-        if user_id not in USER_ORDERS:
-            USER_ORDERS[user_id] = []
-        order_idx = len(USER_ORDERS[user_id])
-        USER_ORDERS[user_id].append({
-            "service_name": service_name,
-            "total_price": 0,
-            "status": "🧮 Заявка на расчет",
-        })
-        queue_db((
-            "order_add",
-            user_id,
-            service_name,
-            0,
-            "🧮 Заявка на расчет",
-        ))
-
-        user = callback.from_user
-        user_tag = f"@{user.username}" if user.username else "без @username"
-        extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
-        if data.get("country"):
-            extra_info += f"\n• Страна: {data.get('country')}"
-        if data.get("target_location"):
-            extra_info += f"\n• Локация: {data.get('target_location')}"
-        if data.get("target_data"):
-            extra_info += f"\n• Данные цели: {data.get('target_data')}"
-        if data.get("urgency"):
-            extra_info += f"\n• Срочность: {data.get('urgency')}"
-        target_photos = data.get("photos") or []
-        order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
-
-        for staff_id in get_staff_recipients():
-            try:
-                if target_photos:
-                    await callback.bot.send_photo(
-                        chat_id=staff_id,
-                        photo=target_photos[0],
-                        caption=(
-                            f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
-                            f" <code>{user.id}</code>)</b>{extra_info}"
-                        ),
-                        reply_markup=order_kb,
-                        parse_mode="HTML",
-                    )
-                    for p_id in target_photos[1:]:
-                        await callback.bot.send_photo(
-                            chat_id=staff_id,
-                            photo=p_id,
-                            caption=(
-                                f"📸 Доп. фото цели по особому заказу от {user_tag} (ID:"
-                                f" <code>{user.id}</code>)"
-                            ),
-                            parse_mode="HTML",
-                        )
-                else:
-                    await callback.bot.send_message(
-                        chat_id=staff_id,
-                        text=(
-                            f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
-                            f" <code>{user.id}</code>)</b>{extra_info}"
-                        ),
-                        reply_markup=order_kb,
-                        parse_mode="HTML",
-                    )
-            except Exception:
-                pass
-
-        text = (
-            "✅ <b>Заявка на расчет отправлена!</b>\n\nМенеджер свяжется с вами в течение 25"
-            " минут и рассчитает стоимость."
-        )
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="🏠 На главную", callback_data="back_home", style="danger"
-                )
-            ]]
-        )
-        await render_step(callback, state, "main.jpg", text, keyboard)
-        await state.clear()
+    if service_name.strip().lower() == "особый заказ" and user_id not in USER_BILLS:
+        await process_special_order_submit(callback, state)
         return
 
     # Клиент дошёл до выбора способа оплаты: запускаем одноразовый контроль для этого захода
