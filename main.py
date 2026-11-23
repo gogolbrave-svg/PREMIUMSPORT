@@ -294,11 +294,11 @@ _URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CRYPTO_PATTERNS = [
-    re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b"),                         # TRON / USDT TRC-20
-    re.compile(r"\b0x[a-fA-F0-9]{40}\b"),                                  # EVM (ERC-20 / BEP-20)
-    re.compile(r"\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b"),              # Bitcoin (Legacy/P2SH/Bech32)
-    re.compile(r"\b(?:UQ|EQ|kQ|0:)[a-zA-Z0-9_-]{46,48}\b"),               # TON адрес
-    re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b"),                        # Solana / Base58 кошельки
+    re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b"),
+    re.compile(r"\b0x[a-fA-F0-9]{40}\b"),
+    re.compile(r"\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b"),
+    re.compile(r"\b(?:UQ|EQ|kQ|0:)[a-zA-Z0-9_-]{46,48}\b"),
+    re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b"),
 ]
 _CARD_PATTERN = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
 _PHONE_PATTERN = re.compile(
@@ -337,7 +337,7 @@ def find_forbidden_requisites_for_manager(text: str) -> str | None:
             return f"номер телефона ({raw_match})"
 
     collapsed_digits = re.sub(r"\D", "", re.sub(r"[\s\-\._,:/\\|()\[\]]+", "", text))
-    if len(collapsed_digits) >= 13 and len(collapsed_digits) <= 19:
+    if 13 <= len(collapsed_digits) <= 19:
         return f"номер карты ({collapsed_digits})"
     if len(collapsed_digits) >= 10 and ("+" in text or "тел" in text.lower() or "phone" in text.lower()):
         return f"номер телефона ({collapsed_digits})"
@@ -1649,7 +1649,7 @@ def _build_order_details_text(
     return details
 
 
-# === КЛАВИАТУРА КАТАЛОГА УСЛУГ (ЦЕНЫ И КНОПКА «О УСЛУГАХ» ИЗ 1-ГО БОТА) ===
+# === КЛАВИАТУРА КАТАЛОГА УСЛУГ ===
 def build_catalog_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -2183,7 +2183,7 @@ async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     service_name = data.get("service_name") or ""
 
-    # Если клиент находится на этапе выбора способа оплаты и нажал «Назад» — уведомляем строго один раз за этот заход
+    # Уведомление отправляется только если клиент на этапе выбора способа оплаты нажал «Назад» (1 раз за заход)
     if user_id in ON_PAYMENT_METHOD_STEP:
         asyncio.create_task(
             _send_unpaid_payment_step_notice(
@@ -2219,7 +2219,6 @@ async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
     elif current_state == OrderForm.urgency.state:
         await _show_photos_step(callback, state)
     else:
-        # Возврат со сводки / оплаты / чека
         if data.get("urgency"):
             await _show_summary_step(callback, state)
         elif data.get("country"):
@@ -3151,7 +3150,7 @@ async def process_staff_direct_reply_and_bill(message: Message, state: FSMContex
         await message.reply(f"❌ Не удалось отправить сообщение: {err_msg}")
         return
 
-    ok_bill, bill_reply = await _issue_bill_to_client(
+    _, bill_reply = await _issue_bill_to_client(
         bot=message.bot,
         caller_id=message.from_user.id,
         caller_state=state,
@@ -3615,46 +3614,6 @@ async def scheduled_broadcast(bot: Bot):
                     logger.error(f"Ошибка рассылки: {e}")
 
 
-async def _notify_staff_unpaid_checkout(bot: Bot, user_id: int):
-    if user_id in BANNED_USERS or user_id in ABANDONED_STAFF_NOTIFIED:
-        return
-    if not _has_active_unpaid_item(user_id):
-        return
-    ABANDONED_STAFF_NOTIFIED.add(user_id)
-    prof = USER_PROFILES.get(user_id, {})
-    user_tag = f"@{prof.get('username')}" if prof.get("username") else "без @username"
-    bill = USER_BILLS.get(user_id) or {}
-    extra = {}
-    if bill.get("service_name"):
-        extra["service_name"] = bill["service_name"]
-    if bill.get("total_price"):
-        extra["total_price"] = bill["total_price"]
-    if bill.get("country"):
-        extra["country"] = bill["country"]
-
-    _record_problem_user(
-        user_id=user_id,
-        kind="unpaid_checkout",
-        step_label=prof.get("max_step") or STEP_LABELS["payment"],
-        query_text="Незавершенная оплата / брошенный счет",
-        data=extra,
-    )
-
-    body = (
-        f"• Клиент: {user_tag} (ID: <code>{user_id}</code>)\n"
-        "• Статус: текущий заказ или счет не оплачен.\n"
-        "• Рекомендация: проведите клиента дальше по оплате или свяжитесь с ним."
-    )
-    await _send_staff_ticket_menu(
-        bot=bot,
-        user_id=user_id,
-        kind="unpaid_checkout",
-        header_title="⚠️ <b>Неоплаченный заказ — требуется ведение клиента</b>",
-        body_text=body,
-        extra_data=extra,
-    )
-
-
 async def delayed_abandoned_cart_reminder(
     bot: Bot, user_id: int, remind_at: datetime.datetime
 ):
@@ -3723,8 +3682,6 @@ async def delayed_abandoned_cart_reminder(
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
-
-        await _notify_staff_unpaid_checkout(bot, user_id)
     except asyncio.CancelledError:
         pass
 
@@ -3816,10 +3773,7 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
 @router.callback_query(F.data == "back_home")
 async def back_home(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    current_state = await state.get_state()
     _reset_payment_step_tracking(user_id, leave_step=True)
-    if current_state != OrderForm.service.state and _has_active_unpaid_item(user_id):
-        asyncio.create_task(_notify_staff_unpaid_checkout(callback.bot, user_id))
     _cancel_abandoned_reminder(user_id)
     await show_main_menu(callback, state)
 
@@ -4411,7 +4365,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         await process_special_order_submit(callback, state)
         return
 
-    # Клиент дошёл до выбора способа оплаты: запускаем одноразовый контроль для этого захода
+    # Вход на этап выбора способа оплаты: запускаем одноразовый контроль + 15-минутный таймер
     _enter_payment_method_step(callback.bot, user_id)
 
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
@@ -4481,10 +4435,12 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_card_option")
 async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
-    _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    user_id = callback.from_user.id
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _track_user_step(user_id, "payment_method", callback.from_user.username)
     await state.update_data(payment_method="card")
     _, country, curr_code, curr_symbol, total_price, _ = (
-        await get_payment_context(callback.from_user.id, state)
+        await get_payment_context(user_id, state)
     )
     rate = await get_exchange_rate(curr_code)
     local_amount = round(total_price * rate)
@@ -4592,9 +4548,11 @@ async def process_payment_help_manager(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
-    _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    user_id = callback.from_user.id
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _track_user_step(user_id, "payment_method", callback.from_user.username)
     _, _, _, _, total_price, _ = await get_payment_context(
-        callback.from_user.id, state
+        user_id, state
     )
     if total_price <= 0:
         total_price = 100
@@ -4719,7 +4677,9 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "crypto_expert")
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
-    _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    user_id = callback.from_user.id
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _track_user_step(user_id, "payment_method", callback.from_user.username)
     await state.update_data(payment_method="crypto")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -4764,7 +4724,9 @@ async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_crypto_"))
 async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
-    _track_user_step(callback.from_user.id, "payment_method", callback.from_user.username)
+    user_id = callback.from_user.id
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _track_user_step(user_id, "payment_method", callback.from_user.username)
     await state.update_data(payment_method="crypto")
     net_key = callback.data.split("_")[2]
     net_info = CRYPTO_NETWORKS.get(net_key)
@@ -4807,7 +4769,7 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
         return
 
     _, _, curr_code, curr_symbol, total_price, _ = await get_payment_context(
-        callback.from_user.id, state
+        user_id, state
     )
     rate = await get_exchange_rate(curr_code)
     local_amount = round(total_price * rate) if total_price > 0 else 0
@@ -4846,7 +4808,9 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
-    _track_user_step(callback.from_user.id, "receipt", callback.from_user.username)
+    user_id = callback.from_user.id
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _track_user_step(user_id, "receipt", callback.from_user.username)
     data = await state.get_data()
     payment_method = data.get("payment_method", "card")
     await state.set_state(OrderForm.receipt)
