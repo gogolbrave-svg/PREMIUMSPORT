@@ -4309,6 +4309,8 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         _reset_payment_step_tracking(user_id, leave_step=True)
         _cancel_abandoned_reminder(user_id)
         _clear_back_after_service_flags(user_id)
+        USER_BILLS.pop(user_id, None)
+        queue_db(("bill_delete", user_id))
         _track_user_step(user_id, "paid", callback.from_user.username, service_name=service_name)
         _record_problem_user(
             user_id=user_id,
@@ -4317,6 +4319,22 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
             query_text=data.get("special_task") or service_name,
             data=data,
         )
+
+        if user_id not in USER_ORDERS:
+            USER_ORDERS[user_id] = []
+        order_idx = len(USER_ORDERS[user_id])
+        USER_ORDERS[user_id].append({
+            "service_name": service_name,
+            "total_price": 0,
+            "status": "🧮 Заявка на расчет",
+        })
+        queue_db((
+            "order_add",
+            user_id,
+            service_name,
+            0,
+            "🧮 Заявка на расчет",
+        ))
 
         user = callback.from_user
         user_tag = f"@{user.username}" if user.username else "без @username"
@@ -4330,7 +4348,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         if data.get("urgency"):
             extra_info += f"\n• Срочность: {data.get('urgency')}"
         target_photos = data.get("photos") or []
-        order_kb = _build_paid_order_keyboard(user.id, order_index=None, in_work=False)
+        order_kb = _build_paid_order_keyboard(user.id, order_index=order_idx, in_work=False)
 
         for staff_id in get_staff_recipients():
             try:
@@ -4339,7 +4357,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
                         chat_id=staff_id,
                         photo=target_photos[0],
                         caption=(
-                            f"🎯 <b>Новый особый заказ от {user_tag} (ID:"
+                            f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
                             f" <code>{user.id}</code>)</b>{extra_info}"
                         ),
                         reply_markup=order_kb,
@@ -4359,7 +4377,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
                     await callback.bot.send_message(
                         chat_id=staff_id,
                         text=(
-                            f"🎯 <b>Новый особый заказ от {user_tag} (ID:"
+                            f"🎯 <b>Заявка на расчет стоимости (Особый заказ) от {user_tag} (ID:"
                             f" <code>{user.id}</code>)</b>{extra_info}"
                         ),
                         reply_markup=order_kb,
@@ -4369,7 +4387,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
                 pass
 
         text = (
-            "✅ <b>Заявка принята!</b>\n\nМенеджер свяжется с вами в течение 25"
+            "✅ <b>Заявка на расчет отправлена!</b>\n\nМенеджер свяжется с вами в течение 25"
             " минут и рассчитает стоимость."
         )
         keyboard = InlineKeyboardMarkup(
@@ -5039,7 +5057,7 @@ async def fallback_order_special_task(message: Message):
 async def fallback_order_location(message: Message):
     await message.reply(
         "⚠️ Пожалуйста, отправьте текстовое сообщение с локацией цели (город,"
-        " адрес, дом или квартира)."
+        " адрес, дом или квартиру)."
     )
 
 
