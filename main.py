@@ -782,7 +782,7 @@ def _build_staff_action_guide(mode: str, target_user_id: int) -> str:
         "• Для отмены нажмите кнопку <b>«Отмена»</b> ниже.\n\n"
         "<i>Шпаргалка ручных команд:</i>\n"
         f"• Сообщение: <code>/send {target_user_id} текст</code>\n"
-        f"• Счет: <code>/bill {target_user_id} услуга 220$</code>"
+        f"• Счет: <code>/bill {target_user_id} особый заказ 220$</code>"
     )
 
 
@@ -3815,8 +3815,9 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
 @router.callback_query(F.data == "back_home")
 async def back_home(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
+    current_state = await state.get_state()
     _reset_payment_step_tracking(user_id, leave_step=True)
-    if _has_active_unpaid_item(user_id):
+    if current_state != OrderForm.service.state and _has_active_unpaid_item(user_id):
         asyncio.create_task(_notify_staff_unpaid_checkout(callback.bot, user_id))
     _cancel_abandoned_reminder(user_id)
     await show_main_menu(callback, state)
