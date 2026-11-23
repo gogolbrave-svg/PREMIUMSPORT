@@ -109,6 +109,7 @@ TICKET_COUNTER = 0
 TICKETS = {}              # ticket_id -> {"user_id": int, "kind": str, "status": str, "staff_msgs": dict[int, int], "extra_data": dict}
 PROBLEM_USERS = {}        # user_id -> {"kind": str, "step": str, "query": str, "data": dict, "updated_at": datetime}
 ABANDONED_STAFF_NOTIFIED = set()  # user_id для которых уже отправлено уведомление о неоплаченном заказе
+BACK_AFTER_SERVICE_NOTIFIED = set()  # (user_id, service_name) — чтобы не дублировать при повторных «Назад»
 
 DB_POOL = None
 DB_WRITE_QUEUE = None
@@ -252,7 +253,7 @@ def _format_user_summary_block(user_id: int, data: dict | None = None) -> str:
 
     price_val = (data or {}).get("total_price")
     if price_val in (None, 0):
-        price_val = bill.get("total_price") or last_order.get("total_price")
+        price_val = (data or {}).get("service_price") or bill.get("total_price") or last_order.get("total_price")
 
     lines = [
         "📋 <b>Сводка по клиенту и заказу:</b>",
@@ -301,7 +302,6 @@ _PHONE_PATTERN = re.compile(
 
 
 def _normalize_for_requisite_check(text: str) -> str:
-    # Убираем пробелы, дефисы, точки, запятые, скобки и слэши между символами
     collapsed = re.sub(r"[\s\-\._,:/\\|()\[\]]+", "", text)
     return f"{text}\n{collapsed}"
 
@@ -375,6 +375,11 @@ def _cancel_abandoned_reminder(user_id: int):
     ABANDONED_DEADLINES.pop(user_id, None)
     ABANDONED_STAFF_NOTIFIED.discard(user_id)
     queue_db(("abandoned_delete", user_id))
+
+
+def _clear_back_after_service_flags(user_id: int):
+    for key in [k for k in BACK_AFTER_SERVICE_NOTIFIED if k[0] == user_id]:
+        BACK_AFTER_SERVICE_NOTIFIED.discard(key)
 
 
 def _has_active_unpaid_item(user_id: int) -> bool:
@@ -768,7 +773,6 @@ def _build_ticket_keyboard(ticket_id: int, user_id: int, kind: str, closed: bool
                 ],
             ]
         )
-    # Особый заказ, переписка и прочие карточки обращений/заказов
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -918,6 +922,86 @@ async def _send_staff_ticket_menu(
             logger.error(f"Ошибка отправки карточки обращения #{tid} сотруднику {staff_id}: {e}")
 
 
+# === УВЕДОМЛЕНИЕ МЕНЕДЖЕРУ ПРИ ВОЗВРАТЕ НАЗАД ПОСЛЕ ВЫБОРА УСЛУГИ ===
+def _detect_back_step_label(current_state: str | None, data: dict) -> str:
+    state_to_key = {
+        OrderForm.debt_info.state: "debt_info",
+        OrderForm.debt_wallet.state: "debt_wallet",
+        OrderForm.special_task.state: "special_task",
+        OrderForm.country.state: "country",
+        OrderForm.target_location.state: "target_location",
+        OrderForm.target_data.state: "target_data",
+        OrderForm.photos.state: "photos",
+        OrderForm.urgency.state: "urgency",
+        OrderForm.receipt.state: "receipt",
+    }
+    if current_state in state_to_key:
+        return STEP_LABELS[state_to_key[current_state]]
+    if data.get("total_price") is not None or data.get("urgency"):
+        return STEP_LABELS["summary"]
+    if data.get("payment_method"):
+        return STEP_LABELS["payment_method"]
+    return STEP_LABELS["payment"]
+
+
+async def _notify_staff_back_after_service(
+    bot: Bot,
+    user_id: int,
+    username: str | None,
+    current_state: str | None,
+    data: dict,
+):
+    if user_id in BANNED_USERS:
+        return
+
+    service_name = (data.get("service_name") or "").strip()
+    if not service_name:
+        return
+
+    # Уведомляем только если клиент уже выбрал услугу в каталоге и нажимает «Назад» на шагах после выбора услуги
+    if current_state in (OrderForm.debt_info.state, OrderForm.special_task.state):
+        return
+
+    notify_key = (user_id, service_name)
+    if notify_key in BACK_AFTER_SERVICE_NOTIFIED:
+        return
+    BACK_AFTER_SERVICE_NOTIFIED.add(notify_key)
+
+    _touch_user_activity(user_id, username)
+    step_label = _detect_back_step_label(current_state, data)
+    user_tag = f"@{username}" if username else "без @username"
+
+    extra = dict(data or {})
+    extra["service_name"] = service_name
+
+    _record_problem_user(
+        user_id=user_id,
+        kind="unpaid_checkout",
+        step_label=step_label,
+        query_text=f"Нажал «Назад» на этапе: {step_label}",
+        data=extra,
+    )
+
+    price_val = extra.get("total_price") or extra.get("service_price")
+    price_line = f"\n• Сумма: <b>{price_val}$</b>" if price_val and int(price_val) > 0 else ""
+
+    body = (
+        f"• Клиент: {user_tag} (ID: <code>{user_id}</code>)\n"
+        f"• Выбранная услуга: <b>{service_name}</b>{price_line}\n"
+        f"• Нажал <b>«Назад»</b> на этапе: <b>{step_label}</b>\n"
+        f"• Статус: <b>Не оплачен</b>"
+    )
+
+    await _send_staff_ticket_menu(
+        bot=bot,
+        user_id=user_id,
+        kind="unpaid_checkout",
+        header_title="⚠️ <b>Неоплаченный заказ — клиент нажал «Назад»</b>",
+        body_text=body,
+        extra_data=extra,
+    )
+
+
 # === POSTGRESQL СЛОЙ ===
 async def init_db():
     global DB_POOL, DB_WRITE_QUEUE
@@ -988,7 +1072,6 @@ async def init_db():
             ADD COLUMN IF NOT EXISTS username TEXT NULL
         """)
 
-        # Миграция схемы crypto_details, если таблица была создана со старым PRIMARY KEY (network_key)
         pk_col = await conn.fetchval("""
             SELECT a.attname
             FROM pg_index i
@@ -1015,7 +1098,6 @@ async def init_db():
                 ALTER TABLE crypto_details_new RENAME TO crypto_details;
             """)
 
-        # Загрузка реквизитов карт
         CARD_DETAILS.clear()
         for row in await conn.fetch(
             "SELECT details, bank, country, frozen_until FROM card_details ORDER BY id ASC"
@@ -1027,19 +1109,16 @@ async def init_db():
                 "frozen_until": row["frozen_until"],
             })
 
-        # Загрузка криптореквизитов (списком по каждой сети)
         CRYPTO_DETAILS.clear()
         for row in await conn.fetch(
             "SELECT network_key, address FROM crypto_details ORDER BY id ASC"
         ):
             CRYPTO_DETAILS.setdefault(row["network_key"], []).append(row["address"])
 
-        # Загрузка банов
         BANNED_USERS.clear()
         for row in await conn.fetch("SELECT user_id FROM banned_users"):
             BANNED_USERS.add(int(row["user_id"]))
 
-        # Загрузка известных пользователей, никнеймов и времени рассылки
         KNOWN_USERS.clear()
         USER_LAST_BROADCAST.clear()
         for row in await conn.fetch(
@@ -1063,14 +1142,12 @@ async def init_db():
             if row["last_broadcast"] is not None:
                 USER_LAST_BROADCAST[uid] = row["last_broadcast"]
 
-        # Загрузка последней страны пользователя
         USER_LAST_COUNTRY.clear()
         for row in await conn.fetch(
             "SELECT user_id, country FROM user_last_country"
         ):
             USER_LAST_COUNTRY[int(row["user_id"])] = row["country"]
 
-        # Загрузка заказов
         USER_ORDERS.clear()
         for row in await conn.fetch(
             "SELECT user_id, service_name, total_price, status FROM user_orders ORDER BY id ASC"
@@ -1082,7 +1159,6 @@ async def init_db():
                 "status": row["status"],
             })
 
-        # Загрузка счетов
         USER_BILLS.clear()
         for row in await conn.fetch("""
             SELECT user_id, service_name, total_price, country, curr_code, curr_symbol, bill_msg_id
@@ -1098,7 +1174,6 @@ async def init_db():
                 "bill_msg_id": row["bill_msg_id"],
             }
 
-        # Загрузка отложенных напоминаний о неоплаченных заказах
         ABANDONED_DEADLINES.clear()
         for row in await conn.fetch(
             "SELECT user_id, remind_at FROM abandoned_checkouts"
@@ -1808,6 +1883,7 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
     user_id = event.from_user.id
     if user_id in BANNED_USERS:
         return
+    _clear_back_after_service_flags(user_id)
     _touch_user_activity(user_id, event.from_user.username)
 
     keyboard = InlineKeyboardMarkup(
@@ -2093,6 +2169,16 @@ async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     service_name = data.get("service_name") or ""
 
+    asyncio.create_task(
+        _notify_staff_back_after_service(
+            bot=callback.bot,
+            user_id=callback.from_user.id,
+            username=callback.from_user.username,
+            current_state=current_state,
+            data=data,
+        )
+    )
+
     if current_state == OrderForm.debt_info.state:
         await state.set_state(OrderForm.service)
         await render_step(callback, state, "catalog.jpg", "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:", build_catalog_keyboard())
@@ -2149,6 +2235,7 @@ async def cmd_ban_user(message: Message, state: FSMContext):
         BANNED_USERS.add(user_id)
         queue_db(("ban_add", user_id))
         _cancel_abandoned_reminder(user_id)
+        _clear_back_after_service_flags(user_id)
         _close_dialog_state(user_id)
         USER_LAST_BROADCAST.pop(user_id, None)
         PROBLEM_USERS.pop(user_id, None)
@@ -2224,6 +2311,7 @@ async def _set_order_status_and_notify(
 
     if "выполнен" in new_status.lower():
         _cancel_abandoned_reminder(target_user_id)
+        _clear_back_after_service_flags(target_user_id)
         USER_BILLS.pop(target_user_id, None)
         queue_db(("bill_delete", target_user_id))
 
@@ -2449,7 +2537,6 @@ async def cmd_aid_problem_users(message: Message):
             continue
         problem_entries.append((uid, info))
 
-    # Также включаем активные обращения и особые заказы, если их не было в PROBLEM_USERS
     known_problem_uids = {u for u, _ in problem_entries}
     for t in TICKETS.values():
         uid = t.get("user_id")
@@ -3067,7 +3154,6 @@ async def admin_reply_handler(message: Message, state: FSMContext):
     if not is_staff(message.from_user.id):
         return
 
-    # Сбрасываем активный режим ручного ответа конкретному клиенту при ответе реплаем
     current_staff_state = await state.get_state()
     if current_staff_state in (
         StaffDirectForm.waiting_reply.state,
@@ -3924,6 +4010,7 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
     price = int(parts[-1])
     service_name = " ".join(parts[1:-1]).replace("_", " ")
 
+    _clear_back_after_service_flags(callback.from_user.id)
     _track_user_step(
         callback.from_user.id,
         "catalog",
@@ -4202,6 +4289,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
     if service_name.lower() == "особый заказ" and user_id not in USER_BILLS:
         _cancel_abandoned_reminder(user_id)
+        _clear_back_after_service_flags(user_id)
         _track_user_step(user_id, "paid", callback.from_user.username, service_name=service_name)
         _record_problem_user(
             user_id=user_id,
@@ -4517,6 +4605,7 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
     user = callback.from_user
     _cancel_abandoned_reminder(user.id)
+    _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     _track_user_step(user.id, "paid", user.username, service_name=service_desc)
 
@@ -4739,6 +4828,7 @@ async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
 async def process_receipt_photo(message: Message, state: FSMContext):
     user = message.from_user
     _cancel_abandoned_reminder(user.id)
+    _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     data, country, _, _, total_price, service_desc = await get_payment_context(
         user.id, state
@@ -4823,6 +4913,7 @@ async def process_receipt_document(message: Message, state: FSMContext):
 
     user = message.from_user
     _cancel_abandoned_reminder(user.id)
+    _clear_back_after_service_flags(user.id)
     PROBLEM_USERS.pop(user.id, None)
     data, country, _, _, total_price, service_desc = await get_payment_context(
         user.id, state
