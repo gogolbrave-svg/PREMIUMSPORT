@@ -1729,12 +1729,10 @@ def get_reputation_stats():
     current_date = datetime.date.today()
     base_date = datetime.date(2026, 1, 1)
     days_passed = max(0, (current_date - base_date).days)
-    completed = 11000 + sum(
-        random.Random(20260101 + d).randint(115, 270) for d in range(days_passed)
-    )
+    completed = 5173 + days_passed * 312
     rng = random.Random(current_date.toordinal())
-    in_progress = rng.randint(134, 357)
-    new_requests = rng.randint(29, 46)
+    in_progress = rng.randint(175, 225)
+    new_requests = rng.randint(256, 409)
     return completed, in_progress, new_requests
 
 
