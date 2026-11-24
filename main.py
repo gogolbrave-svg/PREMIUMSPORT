@@ -157,6 +157,28 @@ STEP_RANKS = {
 }
 
 
+def _is_paid_client_order(order_data: dict) -> bool:
+    status_low = (order_data.get("status") or "").strip().lower()
+    if not status_low:
+        return False
+    if any(unpaid_mark in status_low for unpaid_mark in ("счет", "счёт", "расчет", "расчёт", "не оплач", "брошен")):
+        return False
+    paid_marks = (
+        "оплачено",
+        "оплачен",
+        "проверки чека",
+        "в работе",
+        "выполнен",
+        "оформлен",
+    )
+    return any(mark in status_low for mark in paid_marks)
+
+
+def _get_client_paid_orders(user_id: int) -> list[dict]:
+    raw_orders = USER_ORDERS.get(user_id) or []
+    return [o for o in raw_orders if _is_paid_client_order(o)]
+
+
 def _track_user_step(
     user_id: int,
     step_key: str,
@@ -654,21 +676,7 @@ async def _issue_bill_to_client(
         f" {curr_info['symbol']})</i>"
     )
 
-    if service_name.lower() != "особый заказ":
-        if target_user_id not in USER_ORDERS:
-            USER_ORDERS[target_user_id] = []
-        USER_ORDERS[target_user_id].append({
-            "service_name": service_name,
-            "total_price": amount_val,
-            "status": "🧾 Выставлен счет",
-        })
-        queue_db((
-            "order_add",
-            target_user_id,
-            service_name,
-            amount_val,
-            "🧾 Выставлен счет",
-        ))
+    # Неоплаченные выставленные счета не попадают в «Мои заказы» клиента до оплаты
 
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
     queue_db(("abandoned_set", target_user_id, remind_at))
@@ -3719,10 +3727,10 @@ async def cmd_order(message: Message, state: FSMContext):
 async def cmd_my_orders_msg(message: Message, state: FSMContext):
     user_id = message.from_user.id
     _touch_user_activity(user_id, message.from_user.username)
-    orders = USER_ORDERS.get(user_id, [])
+    orders = _get_client_paid_orders(user_id)
     if not orders:
         text = (
-            "📦 <b>Мои заказы</b>\n\nУ вас пока нет активных или завершенных"
+            "📦 <b>Мои заказы</b>\n\nУ вас пока нет оплаченных или оформленных"
             " заказов."
         )
     else:
@@ -3801,10 +3809,10 @@ async def show_reputation(callback: CallbackQuery, state: FSMContext):
 async def show_my_orders(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
-    orders = USER_ORDERS.get(user_id, [])
+    orders = _get_client_paid_orders(user_id)
     if not orders:
         text = (
-            "📦 <b>Мои заказы</b>\n\nУ вас пока нет активных или завершенных"
+            "📦 <b>Мои заказы</b>\n\nУ вас пока нет оплаченных или оформленных"
             " заказов."
         )
     else:
@@ -4271,21 +4279,8 @@ async def process_special_order_submit(callback: CallbackQuery, state: FSMContex
         data=data,
     )
 
-    if user_id not in USER_ORDERS:
-        USER_ORDERS[user_id] = []
-    order_idx = len(USER_ORDERS[user_id])
-    USER_ORDERS[user_id].append({
-        "service_name": service_name,
-        "total_price": 0,
-        "status": "🧮 Заявка на расчет",
-    })
-    queue_db((
-        "order_add",
-        user_id,
-        service_name,
-        0,
-        "🧮 Заявка на расчет",
-    ))
+    # Особый заказ на расчет не попадает в «Мои заказы» клиента до оплаты
+    order_idx = len(USER_ORDERS.get(user_id) or [])
 
     user_tag = f"@{user.username}" if user.username else "без @username"
     extra_info = f"\n• Задача: {data.get('special_task', 'Не указано')}"
