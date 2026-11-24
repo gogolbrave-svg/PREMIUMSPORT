@@ -1727,7 +1727,7 @@ def build_catalog_keyboard() -> InlineKeyboardMarkup:
 # === РАСЧЕТ РЕПУТАЦИИ ===
 def get_reputation_stats():
     current_date = datetime.date.today()
-    base_date = datetime.date(2026, 1, 1)
+    base_date = datetime.date.today()
     days_passed = max(0, (current_date - base_date).days)
     completed = 5173 + days_passed * 312
     rng = random.Random(current_date.toordinal())
