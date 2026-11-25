@@ -69,6 +69,7 @@ class OrderForm(StatesGroup):
     photos = State()
     urgency = State()
     promo_code = State()
+    payment = State()
     receipt = State()
 
 
@@ -2964,6 +2965,14 @@ async def _restore_or_go_order_on_back(callback: CallbackQuery, state: FSMContex
         )
 
 
+@router.callback_query(
+    F.data.in_({"promo_back_to_order", "promo_code_back_to_order", "back_to_order"})
+    | F.data.startswith("promo_back")
+)
+async def cb_promo_back_to_order(callback: CallbackQuery, state: FSMContext):
+    await _restore_or_go_order_on_back(callback, state)
+
+
 @router.callback_query(F.data == "promo_code_entry")
 async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
     try:
@@ -2992,18 +3001,10 @@ async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
     text = (
         "🎟 <b>Активация промокода</b>\n\n"
         "Впиши промокод одним словом следующим сообщением.\n\n"
-        "💡 <i>Не знаешь как получить — пиши менеджеру (актуальный юзернейм менеджера вы всегда "
-        "можете найти в нашем телеграм канале) и получи секретный промокод на скидку от -10 до -50% на первый заказ!</i>"
+        "💡 <i>Не знаешь как получить — пиши менеджеру (актуальный юзернейм менеджера "
+        "вы всегда можете найти в нашем телеграм канале) и получи секретный промокод на скидку от -10 до -50% на первый заказ!</i>"
     )
     await render_step(callback, state, PROMO_BANNER_NAME, text, _build_promo_back_keyboard())
-
-
-@router.callback_query(
-    F.data.in_({"promo_back_to_order", "promo_code_back_to_order", "back_to_order"})
-    | F.data.startswith("promo_back")
-)
-async def cb_promo_back_to_order(callback: CallbackQuery, state: FSMContext):
-    await _restore_or_go_order_on_back(callback, state)
 
 
 @router.message(OrderForm.promo_code, F.text)
@@ -5076,6 +5077,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     user_id = callback.from_user.id
+    await state.set_state(OrderForm.payment)
     _track_user_step(user_id, "payment", callback.from_user.username)
     data, country, curr_code, curr_symbol, total_price, service_name = (
         await get_payment_context(user_id, state)
