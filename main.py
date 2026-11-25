@@ -68,7 +68,6 @@ class OrderForm(StatesGroup):
     target_data = State()
     photos = State()
     urgency = State()
-    promo_code = State()
     receipt = State()
 
 
@@ -101,13 +100,6 @@ CRYPTO_DETAILS = {}
 CRYPTO_POINTERS = {}
 BANNED_USERS = set()
 BANNER_CACHE = {}  # Кэш file_id баннеров для мгновенной загрузки
-
-# Промокоды: одноразовое применение на первый заказ, ручное одобрение стафом
-USED_PROMO_USERS = set()         # user_id, которым уже подтверждён и применён промокод
-USER_APPLIED_PROMOS = {}       # user_id -> {"code": str, "discount_pct": int, "original_price": float, "discounted_price": float}
-PROMO_REQUESTS = {}            # req_id -> dict
-PROMO_REQUEST_COUNTER = 0
-PROMO_DECIDED_REQUESTS = set()   # req_id уже обработанных заявок (защита от повторного нажатия)
 
 # Трекинг активности клиентов, обращений и диалогов
 USER_PROFILES = {}        # user_id -> {"username": str|None, "first_seen": datetime|None, "last_seen": datetime|None, "last_service": str|None, "max_step": str}
@@ -143,7 +135,6 @@ STEP_LABELS = {
     "summary": "8. Сводка заказа",
     "payment": "9. Переход к оплате",
     "payment_method": "10. Выбор способа оплаты / реквизитов",
-    "promo": "10. Запросил промокод",
     "receipt": "11. Отправка чека",
     "paid": "12. Оплачено / заявка отправлена",
 }
@@ -161,27 +152,9 @@ STEP_RANKS = {
     "summary": 8,
     "payment": 9,
     "payment_method": 10,
-    "promo": 10,
     "receipt": 11,
     "paid": 12,
 }
-
-
-def _format_num(val: float | int) -> str:
-    num = float(val)
-    if num.is_integer():
-        return str(int(num))
-    return f"{round(num, 2):.2f}".rstrip("0").rstrip(".")
-
-
-def _apply_discount_once(base_price: float | int, discount_pct: int) -> float | int:
-    base = float(base_price or 0)
-    if base <= 0 or discount_pct <= 0:
-        return int(base) if base.is_integer() else round(base, 2)
-    discounted = base * (100 - discount_pct) / 100.0
-    if discounted.is_integer():
-        return int(discounted)
-    return round(discounted, 2)
 
 
 def _is_paid_client_order(order_data: dict) -> bool:
@@ -332,8 +305,8 @@ def _format_user_summary_block(user_id: int, data: dict | None = None) -> str:
             lines.append(f"• Детали особого заказа: {data.get('special_task')}")
         if data.get("urgency"):
             lines.append(f"• Срочность: <b>{data.get('urgency')}</b>")
-    if price_val and float(price_val) > 0:
-        lines.append(f"• Сумма: <b>{_format_num(price_val)}$</b>")
+    if price_val and int(price_val) > 0:
+        lines.append(f"• Сумма: <b>{price_val}$</b>")
     return "\n".join(lines)
 
 
@@ -670,30 +643,17 @@ async def _issue_bill_to_client(
     amount_val = (
         int(amount_usd) if amount_usd.is_integer() else round(amount_usd, 2)
     )
-    applied_promo = USER_APPLIED_PROMOS.get(target_user_id)
-    effective_price = amount_val
-    original_price = amount_val
-    discount_pct = 0
-    if applied_promo and not _get_client_paid_orders(target_user_id):
-        discount_pct = int(applied_promo.get("discount_pct", 0) or 0)
-        if discount_pct > 0:
-            effective_price = _apply_discount_once(amount_val, discount_pct)
-            applied_promo["original_price"] = original_price
-            applied_promo["discounted_price"] = effective_price
-
-    amount_str = _format_num(effective_price)
+    amount_str = str(amount_val)
     country = USER_LAST_COUNTRY.get(target_user_id, "Россия")
     curr_info = COUNTRY_CURRENCIES.get(
         country, {"code": "USD", "symbol": "USD"}
     )
     rate = await get_exchange_rate(curr_info["code"])
-    local_amount = round(float(effective_price) * rate)
+    local_amount = round(amount_usd * rate)
 
     USER_BILLS[target_user_id] = {
         "service_name": service_name,
-        "total_price": effective_price,
-        "original_total_price": original_price,
-        "promo_discount_pct": discount_pct,
+        "total_price": amount_val,
         "country": country,
         "curr_code": curr_info["code"],
         "curr_symbol": curr_info["symbol"],
@@ -701,23 +661,10 @@ async def _issue_bill_to_client(
     if caller_id == target_user_id:
         await caller_state.update_data(
             service_name=service_name,
-            total_price=effective_price,
-            original_total_price=original_price,
-            promo_discount_pct=discount_pct,
+            total_price=amount_val,
             country=country,
             curr_code=curr_info["code"],
             curr_symbol=curr_info["symbol"],
-        )
-
-    if discount_pct > 0:
-        sum_line = (
-            f"Сумма: <s>{_format_num(original_price)}$</s> → <b>{amount_str}$</b> "
-            f"<b>(-{discount_pct}%)</b> <i>(≈ {local_amount:,} {curr_info['symbol']})</i>"
-        )
-    else:
-        sum_line = (
-            f"Сумма: <b>{amount_str}$</b> <i>(≈ {local_amount:,}"
-            f" {curr_info['symbol']})</i>"
         )
 
     bill_text = (
@@ -725,8 +672,11 @@ async def _issue_bill_to_client(
         "Время на завершение: <b><u>20:00</u></b>\n\n"
         f"🧾 <b>Счет на {service_name}</b>\n"
         f"💳 <b>Способ оплаты ({country})</b>\n"
-        f"{sum_line}"
+        f"Сумма: <b>{amount_str}$</b> <i>(≈ {local_amount:,}"
+        f" {curr_info['symbol']})</i>"
     )
+
+    # Неоплаченные выставленные счета не попадают в «Мои заказы» клиента до оплаты
 
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
     queue_db(("abandoned_set", target_user_id, remind_at))
@@ -824,7 +774,7 @@ def _build_staff_action_guide(mode: str, target_user_id: int) -> str:
         return (
             f"🧾 <b>Выставление счета клиенту (ID: <code>{target_user_id}</code>)</b>\n\n"
             "<b>Как заполнить:</b> отправьте одним сообщением <code>&lt;услуга&gt; &lt;сумма$&gt;</code>\n"
-            "• Пример: <code>особый заказ 220$</code> или <code>Избить 160$</code>\n"
+            "• Пример: <code>особый заказ 220$</code> или <code>Избить 100$</code>\n"
             "• Валюта страны клиента и примерный курс подставятся автоматически.\n"
             "• Для отмены нажмите кнопку <b>«Отмена»</b> ниже.\n\n"
             "<i>Шпаргалка ручных команд:</i>\n"
@@ -1130,11 +1080,6 @@ async def init_db():
                 user_id BIGINT PRIMARY KEY,
                 remind_at TIMESTAMP NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS used_promo_users (
-                user_id BIGINT PRIMARY KEY,
-                promo_code TEXT NOT NULL,
-                discount_pct INTEGER NOT NULL
-            );
         """)
 
         await conn.execute("""
@@ -1192,20 +1137,6 @@ async def init_db():
         BANNED_USERS.clear()
         for row in await conn.fetch("SELECT user_id FROM banned_users"):
             BANNED_USERS.add(int(row["user_id"]))
-
-        USED_PROMO_USERS.clear()
-        for row in await conn.fetch("SELECT user_id, promo_code, discount_pct FROM used_promo_users"):
-            uid = int(row["user_id"])
-            USED_PROMO_USERS.add(uid)
-            USER_APPLIED_PROMOS.setdefault(
-                uid,
-                {
-                    "code": row["promo_code"],
-                    "discount_pct": int(row["discount_pct"]),
-                    "original_price": 0,
-                    "discounted_price": 0,
-                },
-            )
 
         KNOWN_USERS.clear()
         USER_LAST_BROADCAST.clear()
@@ -1375,7 +1306,7 @@ async def _exec_db_action(action: tuple):
                     "INSERT INTO user_orders (user_id, service_name, total_price, status) VALUES ($1, $2, $3, $4)",
                     user_id,
                     service_name,
-                    int(round(float(total_price or 0))),
+                    int(total_price or 0),
                     status,
                 )
             elif kind == "order_set_last_status":
@@ -1418,7 +1349,7 @@ async def _exec_db_action(action: tuple):
                     """,
                     user_id,
                     bill_data.get("service_name", "Услуга"),
-                    int(round(float(bill_data.get("total_price", 0) or 0))),
+                    int(bill_data.get("total_price", 0) or 0),
                     bill_data.get("country", "Россия"),
                     bill_data.get("curr_code", "RUB"),
                     bill_data.get("curr_symbol", "₽"),
@@ -1445,18 +1376,6 @@ async def _exec_db_action(action: tuple):
                 await conn.execute(
                     "DELETE FROM abandoned_checkouts WHERE user_id = $1",
                     user_id,
-                )
-            elif kind == "promo_used_add":
-                _, user_id, promo_code, discount_pct = action
-                await conn.execute(
-                    """
-                    INSERT INTO used_promo_users (user_id, promo_code, discount_pct)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (user_id) DO NOTHING
-                    """,
-                    user_id,
-                    promo_code,
-                    int(discount_pct),
                 )
     except Exception as e:
         logger.error(f"Ошибка записи в PostgreSQL ({kind}): {e}")
@@ -1614,7 +1533,7 @@ async def get_exchange_rate(target_currency: str) -> float:
     url = "https://open.er-api.com/v6/latest/USD"
     try:
         async with ClientSession() as session:
-            async with session.get(url, timeout=2) as response:
+            async with session.get(url, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
                     rates = data.get("rates", {})
@@ -1669,13 +1588,6 @@ def build_payment_keyboard(country: str, back_callback: str = "go_to_payment") -
             ],
             [
                 InlineKeyboardButton(
-                    text="🎟 Промокод",
-                    callback_data="promo_code_entry",
-                    style="primary",
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="💬 Нужна помощь",
                     callback_data="payment_help_manager",
                     style="primary",
@@ -1693,7 +1605,6 @@ def build_payment_keyboard(country: str, back_callback: str = "go_to_payment") -
 async def get_payment_context(user_id: int, state: FSMContext):
     data = await state.get_data()
     bill = USER_BILLS.get(user_id, {})
-    prof = USER_PROFILES.get(user_id, {})
     country = (
         data.get("country")
         or bill.get("country")
@@ -1708,77 +1619,26 @@ async def get_payment_context(user_id: int, state: FSMContext):
     curr_symbol = (
         data.get("curr_symbol") or bill.get("curr_symbol") or curr_info["symbol"]
     )
-
     if bill:
-        raw_price = bill.get("total_price", 250)
-        raw_orig = bill.get("original_total_price", raw_price)
-        discount_pct = int(bill.get("promo_discount_pct", 0) or 0)
+        total_price = bill.get("total_price", 250)
     else:
-        raw_price = (
+        total_price = (
             data.get("total_price") if data.get("total_price") is not None else 250
         )
-        raw_orig = (
-            data.get("original_total_price")
-            if data.get("original_total_price") is not None
-            else raw_price
-        )
-        discount_pct = int(data.get("promo_discount_pct", 0) or 0)
-
-    # Применяем подтверждённый промокод ровно один раз на полную сумму первого заказа
-    applied = USER_APPLIED_PROMOS.get(user_id)
-    if applied and not _get_client_paid_orders(user_id):
-        ap_pct = int(applied.get("discount_pct", 0) or 0)
-        if ap_pct > 0 and discount_pct == 0:
-            discount_pct = ap_pct
-            raw_orig = raw_price
-            raw_price = _apply_discount_once(raw_orig, discount_pct)
-            applied["original_price"] = raw_orig
-            applied["discounted_price"] = raw_price
-            await state.update_data(
-                original_total_price=raw_orig,
-                total_price=raw_price,
-                promo_discount_pct=discount_pct,
-            )
-            if user_id in USER_BILLS:
-                USER_BILLS[user_id]["original_total_price"] = raw_orig
-                USER_BILLS[user_id]["total_price"] = raw_price
-                USER_BILLS[user_id]["promo_discount_pct"] = discount_pct
-                queue_db(("bill_set", user_id, dict(USER_BILLS[user_id])))
-
-    total_price = raw_price
     service_name = (
-        data.get("service_name")
-        or bill.get("service_name")
-        or prof.get("last_service")
-        or "Услуга"
+        data.get("service_name") or bill.get("service_name") or "Услуга"
     )
-    enriched_data = dict(data)
-    enriched_data["country"] = country
-    enriched_data["curr_code"] = curr_code
-    enriched_data["curr_symbol"] = curr_symbol
-    enriched_data["service_name"] = service_name
-    enriched_data["original_total_price"] = raw_orig
-    enriched_data["total_price"] = total_price
-    enriched_data["promo_discount_pct"] = discount_pct
-    return enriched_data, country, curr_code, curr_symbol, total_price, service_name
+    return data, country, curr_code, curr_symbol, total_price, service_name
 
 
 def _build_order_details_text(
     data: dict, country: str, service_desc: str, total_price
 ) -> str:
-    orig_price = data.get("original_total_price")
-    disc_pct = int(data.get("promo_discount_pct", 0) or 0)
-    if disc_pct > 0 and orig_price and float(orig_price) > float(total_price or 0):
-        price_val = (
-            f"<s>{_format_num(orig_price)}$</s> → <b>{_format_num(total_price)}$</b> "
-            f"(-{disc_pct}%)"
-        )
-    else:
-        price_val = (
-            f"{_format_num(total_price)}$"
-            if total_price and float(total_price) > 0
-            else "Расчет менеджера"
-        )
+    price_val = (
+        f"{total_price}$"
+        if total_price and total_price > 0
+        else "Расчет менеджера"
+    )
     details = f"\n• Услуга: {service_desc}\n• Сумма: {price_val}"
     if country:
         details += f"\n• Страна: {country}"
@@ -1803,50 +1663,50 @@ def build_catalog_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🧎 Извинение на коленях — 85$",
-                    callback_data="srv_Извинение_на_коленях_85",
+                    text="🧎 Извинение на коленях — 50$",
+                    callback_data="srv_Извинение_на_коленях_50",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🥊 Избить — 160$",
-                    callback_data="srv_Избить_160",
+                    text="🥊 Избить — 100$",
+                    callback_data="srv_Избить_100",
                     style="danger",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="💸 Вернуть долг — 230$",
-                    callback_data="srv_Вернуть_долг_230",
+                    text="💸 Вернуть долг — 150$",
+                    callback_data="srv_Вернуть_долг_150",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🦴 Сломать пальцы — 310$",
-                    callback_data="srv_Сломать_пальцы_310",
+                    text="🦴 Сломать пальцы — 200$",
+                    callback_data="srv_Сломать_пальцы_200",
                     style="danger",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🦾 Сломать конечности — 460$",
-                    callback_data="srv_Сломать_конечности_460",
+                    text="🦾 Сломать конечности — 300$",
+                    callback_data="srv_Сломать_конечности_300",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🪓 Отрубить конечности — 740$",
-                    callback_data="srv_Отрубить_конечности_740",
+                    text="🪓 Отрубить конечности — 500$",
+                    callback_data="srv_Отрубить_конечности_500",
                     style="danger",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⚡️ Убийство — 4600$",
-                    callback_data="srv_Убийство_4600",
+                    text="⚡️ Убийство — 3000$",
+                    callback_data="srv_Убийство_3000",
                     style="primary",
                 )
             ],
@@ -1903,12 +1763,6 @@ async def render_step(
     text: str,
     reply_markup: InlineKeyboardMarkup,
 ):
-    if isinstance(event, CallbackQuery):
-        try:
-            await event.answer()
-        except Exception:
-            pass
-
     bot = event.bot
     chat_id = (
         event.chat.id if isinstance(event, Message) else event.message.chat.id
@@ -1926,6 +1780,7 @@ async def render_step(
         photo_source = FSInputFile(banner_path)
 
     if isinstance(event, CallbackQuery):
+        await event.answer()
         msg = event.message
         if photo_source:
             try:
@@ -2039,24 +1894,12 @@ async def render_step(
         await state.update_data(bot_msg_id=new_msg.message_id)
 
 
-async def _full_reset_user_session(user_id: int, state: FSMContext, username: str | None = None):
-    await state.clear()
-    _reset_payment_step_tracking(user_id, leave_step=True)
-    _cancel_abandoned_reminder(user_id)
-    _clear_back_after_service_flags(user_id)
-    PROBLEM_USERS.pop(user_id, None)
-    _touch_user_activity(user_id, username)
-    if user_id in USER_PROFILES:
-        USER_PROFILES[user_id]["max_step"] = STEP_LABELS.get("catalog")
-    USER_STEP_RANK[user_id] = STEP_RANKS.get("catalog", 1)
-
-
 # === ГЛАВНОЕ МЕНЮ ===
 async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
+    await state.clear()
     user_id = event.from_user.id
     if user_id in BANNED_USERS:
         return
-    await state.clear()
     _reset_payment_step_tracking(user_id, leave_step=True)
     _clear_back_after_service_flags(user_id)
     _touch_user_activity(user_id, event.from_user.username)
@@ -2260,15 +2103,15 @@ async def _show_urgency_step(event: Message | CallbackQuery, state: FSMContext):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="⚡ За 2-3 часа (+80$)",
-                    callback_data="urg_fast_80",
+                    text="⚡ За 2-3 часа (+50$)",
+                    callback_data="urg_fast_50",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🕐 Завтра (+40$)",
-                    callback_data="urg_tomorrow_40",
+                    text="🕐 Завтра (+20$)",
+                    callback_data="urg_tomorrow_20",
                     style="danger",
                 )
             ],
@@ -2291,48 +2134,23 @@ async def _show_urgency_step(event: Message | CallbackQuery, state: FSMContext):
 
 
 async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
-    user_id = event.from_user.id
     data = await state.get_data()
-    _track_user_step(user_id, "summary", event.from_user.username, service_name=data.get("service_name"))
+    _track_user_step(event.from_user.id, "summary", event.from_user.username, service_name=data.get("service_name"))
     base_service_price = data.get("service_price", 0)
     urg_price = data.get("urgency_price", 0)
     urgency = data.get("urgency") or "📅 2-5 дней"
-    raw_total_price = (base_service_price + urg_price) if base_service_price > 0 else 0
-
-    discount_pct = int(data.get("promo_discount_pct", 0) or 0)
-    applied = USER_APPLIED_PROMOS.get(user_id)
-    if applied and not _get_client_paid_orders(user_id):
-        ap_pct = int(applied.get("discount_pct", 0) or 0)
-        if ap_pct > 0:
-            discount_pct = ap_pct
-
-    if raw_total_price > 0 and discount_pct > 0:
-        total_price = _apply_discount_once(raw_total_price, discount_pct)
-    else:
-        total_price = raw_total_price
-
-    await state.update_data(
-        original_total_price=raw_total_price,
-        total_price=total_price,
-        promo_discount_pct=discount_pct,
-        urgency=urgency,
-    )
+    total_price = (base_service_price + urg_price) if base_service_price > 0 else 0
+    await state.update_data(total_price=total_price, urgency=urgency)
 
     rate = await get_exchange_rate(data.get("curr_code", "USD"))
-    local_amount = round(float(total_price) * rate) if float(total_price) > 0 else 0
+    local_amount = round(total_price * rate) if total_price > 0 else 0
 
-    if float(raw_total_price) > 0 and discount_pct > 0:
-        price_display = (
-            f"<s>{_format_num(raw_total_price)}$</s> → <b>{_format_num(total_price)}$</b> "
-            f"<b>(-{discount_pct}%)</b> <i>(≈ {local_amount:,} {data.get('curr_symbol')})</i>"
-        )
-    elif float(total_price) > 0:
-        price_display = (
-            f"<b>{_format_num(total_price)}$</b> <i>(≈ {local_amount:,}"
-            f" {data.get('curr_symbol')})</i>"
-        )
-    else:
-        price_display = "<b>Рассчитывается менеджером</b>"
+    price_display = (
+        f"<b>{total_price}$</b> <i>(≈ {local_amount:,}"
+        f" {data.get('curr_symbol')})</i>"
+        if total_price > 0
+        else "<b>Рассчитывается менеджером</b>"
+    )
 
     is_special = (data.get("service_name") or "").strip().lower() == "особый заказ"
     action_btn_text = "✅ Отправить заявку" if is_special else "💳 Перейти к оплате"
@@ -2366,15 +2184,12 @@ async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "order_back_step")
 async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     current_state = await state.get_state()
     data = await state.get_data()
     service_name = data.get("service_name") or ""
 
+    # Уведомление отправляется только если клиент на этапе выбора способа оплаты нажал «Назад» (1 раз за заход)
     if user_id in ON_PAYMENT_METHOD_STEP:
         asyncio.create_task(
             _send_unpaid_payment_step_notice(
@@ -2748,7 +2563,7 @@ async def cmd_aid_problem_users(message: Message):
         uid = t.get("user_id")
         if not uid or uid in BANNED_USERS or uid in known_problem_uids:
             continue
-        if t.get("kind") in ("support", "payment_help", "special_order", "unpaid_checkout", "promo_request") and t.get("status") != "🔒 Закрыто":
+        if t.get("kind") in ("support", "payment_help", "special_order", "unpaid_checkout") and t.get("status") != "🔒 Закрыто":
             prof = USER_PROFILES.get(uid, {})
             problem_entries.append((
                 uid,
@@ -2772,7 +2587,6 @@ async def cmd_aid_problem_users(message: Message):
         "support": "💬 Поддержка",
         "unpaid_checkout": "⏳ Неоплаченный заказ",
         "send_reply": "↩️ Переписка по обращению",
-        "promo_request": "🎟 Запрос промокода",
     }
 
     lines = [f"🆘 <b>Проблемные клиенты ({len(problem_entries)}):</b>\n"]
@@ -2810,465 +2624,6 @@ async def cmd_aid_problem_users(message: Message):
     await message.reply("\n".join(lines), parse_mode="HTML")
 
 
-# === ПРОМОКОДЫ: ВВОД КЛИЕНТОМ И РУЧНОЕ ПОДТВЕРЖДЕНИЕ АДМИНОМ / МЕНЕДЖЕРОМ ===
-_PROMO_WORD_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_-]{2,32}$")
-
-
-def _build_promo_back_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text="⬅️ Вернуться к заказу",
-                callback_data="promo_back_to_order",
-                style="primary",
-            )
-        ]]
-    )
-
-
-def _build_promo_staff_keyboard(req_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Подтвердить",
-                    callback_data=f"promo_approve_{req_id}",
-                    style="primary",
-                ),
-                InlineKeyboardButton(
-                    text="❌ Отменить",
-                    callback_data=f"promo_reject_{req_id}",
-                    style="danger",
-                ),
-            ]
-        ]
-    )
-
-
-async def _restore_or_go_order_on_back(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    if user_id in BANNED_USERS:
-        return
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    _touch_user_activity(user_id, callback.from_user.username)
-    data = await state.get_data()
-    bill = USER_BILLS.get(user_id) or {}
-    prof = USER_PROFILES.get(user_id) or {}
-
-    has_order_ctx = bool(
-        data.get("service_name")
-        or data.get("total_price") is not None
-        or data.get("service_price") is not None
-        or data.get("country")
-        or bill
-        or prof.get("last_service")
-    )
-
-    if has_order_ctx:
-        restored_country = (
-            data.get("country")
-            or bill.get("country")
-            or USER_LAST_COUNTRY.get(user_id, "Россия")
-        )
-        curr_info = COUNTRY_CURRENCIES.get(
-            restored_country, {"code": "USD", "symbol": "USD"}
-        )
-        restored_service = (
-            data.get("service_name")
-            or bill.get("service_name")
-            or prof.get("last_service")
-            or "Услуга"
-        )
-        if bill:
-            restored_price = bill.get("total_price", 250)
-            restored_orig = bill.get("original_total_price", restored_price)
-            restored_disc = int(bill.get("promo_discount_pct", 0) or 0)
-        else:
-            raw_fallback = (
-                data.get("total_price")
-                if data.get("total_price") is not None
-                else data.get("service_price")
-            )
-            restored_price = raw_fallback if raw_fallback is not None else 250
-            restored_orig = (
-                data.get("original_total_price")
-                if data.get("original_total_price") is not None
-                else restored_price
-            )
-            restored_disc = int(data.get("promo_discount_pct", 0) or 0)
-
-        await state.update_data(
-            service_name=restored_service,
-            country=restored_country,
-            curr_code=data.get("curr_code") or bill.get("curr_code") or curr_info["code"],
-            curr_symbol=data.get("curr_symbol") or bill.get("curr_symbol") or curr_info["symbol"],
-            total_price=restored_price,
-            original_total_price=restored_orig,
-            promo_discount_pct=restored_disc,
-        )
-        _track_user_step(
-            user_id,
-            "payment",
-            callback.from_user.username,
-            service_name=restored_service,
-        )
-        await state.set_state(OrderForm.payment)
-        await process_go_to_payment(callback, state)
-    else:
-        _reset_payment_step_tracking(user_id, leave_step=True)
-        _track_user_step(user_id, "catalog", callback.from_user.username)
-        await state.set_state(OrderForm.service)
-        await render_step(
-            callback,
-            state,
-            "catalog.jpg",
-            "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:",
-            build_catalog_keyboard(),
-        )
-
-
-@router.callback_query(F.data == "promo_code_entry")
-async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    user_id = callback.from_user.id
-    _touch_user_activity(user_id, callback.from_user.username)
-
-    if _get_client_paid_orders(user_id):
-        await callback.answer(
-            "❌ Промокод доступен только на первый заказ.", show_alert=True
-        )
-        return
-
-    if user_id in USED_PROMO_USERS or user_id in USER_APPLIED_PROMOS:
-        await callback.answer(
-            "❌ Вы уже использовали промокод (он применяется только один раз).",
-            show_alert=True,
-        )
-        return
-
-    _reset_payment_step_tracking(user_id, leave_step=True)
-    await state.set_state(OrderForm.promo_code)
-
-    text = (
-        "🎟 <b>Активация промокода</b>\n\n"
-        "Впиши промокод одним словом следующим сообщением.\n\n"
-        "💡 <i>Не знаешь как получить — пиши менеджеру (актуальный юзернейм менеджера вы всегда "
-        "можете найти в нашем телеграм канале) и получи секретный промокод на скидку от -10 до -50% на первый заказ!</i>"
-    )
-    await render_step(callback, state, "payment.jpg", text, _build_promo_back_keyboard())
-
-
-@router.callback_query(
-    F.data.in_({"promo_back_to_order", "promo_code_back_to_order", "back_to_order"})
-    | F.data.startswith("promo_back")
-)
-async def cb_promo_back_to_order(callback: CallbackQuery, state: FSMContext):
-    await _restore_or_go_order_on_back(callback, state)
-
-
-@router.message(OrderForm.promo_code, F.text)
-async def process_promo_code_input(message: Message, state: FSMContext):
-    global PROMO_REQUEST_COUNTER
-    user = message.from_user
-    user_id = user.id
-    raw_code = message.text.strip()
-    cmd_head = raw_code.split()[0].lower().split("@")[0] if raw_code else ""
-    if cmd_head in ("/start", "/restart"):
-        await _full_reset_user_session(user_id, state, user.username)
-        if cmd_head == "/restart":
-            try:
-                await message.reply("🔄 Бот перезапущен, состояние очищено.")
-            except Exception:
-                pass
-        await show_main_menu(message, state)
-        return
-
-    _touch_user_activity(user_id, user.username)
-    words = raw_code.split()
-    if len(words) != 1 or not _PROMO_WORD_RE.match(words[0]):
-        await message.reply(
-            "❌ Неправильный промокод, АРЕНУ не обманешь)\n\n"
-            "Введите промокод <b>одним словом</b> или нажмите кнопку возврата:",
-            reply_markup=_build_promo_back_keyboard(),
-            parse_mode="HTML",
-        )
-        return
-
-    code_upper = words[0].upper()
-
-    if _get_client_paid_orders(user_id):
-        await message.reply(
-            "❌ Промокод применяется только на первый заказ.",
-            reply_markup=_build_promo_back_keyboard(),
-            parse_mode="HTML",
-        )
-        return
-
-    if user_id in USED_PROMO_USERS or user_id in USER_APPLIED_PROMOS:
-        await message.reply(
-            "❌ Промокод уже был применён ранее (строго один раз на первый заказ).",
-            reply_markup=_build_promo_back_keyboard(),
-            parse_mode="HTML",
-        )
-        return
-
-    # Определяем процент скидки по промокоду (BLOODYEAR = 30%, для прочих кодов — 10% по умолчанию)
-    discount_pct = 30 if code_upper == "BLOODYEAR" else 10
-
-    data, country, curr_code, curr_symbol, current_price, service_name = (
-        await get_payment_context(user_id, state)
-    )
-    base_full_price = data.get("original_total_price") or current_price or 0
-
-    _track_user_step(user_id, "promo", user.username, service_name=service_name)
-    _record_problem_user(
-        user_id=user_id,
-        kind="promo_request",
-        step_label="запросил промокод",
-        query_text=f"Промокод: {code_upper} (-{discount_pct}%)",
-        data=data,
-    )
-
-    PROMO_REQUEST_COUNTER += 1
-    req_id = PROMO_REQUEST_COUNTER
-    PROMO_REQUESTS[req_id] = {
-        "req_id": req_id,
-        "user_id": user_id,
-        "username": user.username,
-        "code": code_upper,
-        "discount_pct": discount_pct,
-        "base_full_price": base_full_price,
-        "country": country,
-        "curr_code": curr_code,
-        "curr_symbol": curr_symbol,
-        "service_name": service_name,
-        "order_data": dict(data),
-        "status": "pending",
-        "staff_msgs": {},
-    }
-
-    user_tag = f"@{user.username}" if user.username else "без @username"
-    order_details = _build_order_details_text(data, country, service_name, base_full_price)
-    summary_block = _format_user_summary_block(user_id, data)
-
-    staff_text = (
-        f"🎟 <b>Запрос активации промокода #{req_id}</b>\n"
-        f"• Статус: <b>запросил промокод</b>\n"
-        f"• Клиент: {user_tag} | ID: <code>{user_id}</code>\n"
-        f"• Промокод: <code>{code_upper}</code> (скидка <b>-{discount_pct}%</b>)\n"
-        f"• Данные заказа:{order_details}\n\n"
-        f"{summary_block}"
-    )
-    kb_staff = _build_promo_staff_keyboard(req_id)
-
-    for staff_id in get_staff_recipients():
-        try:
-            sent = await message.bot.send_message(
-                chat_id=staff_id,
-                text=staff_text,
-                reply_markup=kb_staff,
-                parse_mode="HTML",
-            )
-            PROMO_REQUESTS[req_id]["staff_msgs"][staff_id] = sent.message_id
-        except Exception as e:
-            logger.error(f"Ошибка отправки заявки на промокод #{req_id} стафу {staff_id}: {e}")
-
-    await state.set_state(OrderForm.payment)
-    await message.reply(
-        "⏳ <b>Заявка на активацию промокода отправлена!</b>\n\n"
-        "Промокод пока не применён. Ожидайте проверки менеджером или администратором.",
-        reply_markup=_build_promo_back_keyboard(),
-        parse_mode="HTML",
-    )
-
-
-async def _finalize_promo_staff_message(bot: Bot, req: dict, decision_label: str):
-    req_id = req["req_id"]
-    uid = req["user_id"]
-    uname = req.get("username")
-    user_tag = f"@{uname}" if uname else "без @username"
-    code_upper = req["code"]
-    disc_pct = req["discount_pct"]
-    base_full_price = req.get("base_full_price", 0)
-    order_details = _build_order_details_text(
-        req.get("order_data") or {},
-        req.get("country") or "Россия",
-        req.get("service_name") or "Услуга",
-        base_full_price,
-    )
-    summary_block = _format_user_summary_block(uid, req.get("order_data") or {})
-
-    updated_text = (
-        f"🎟 <b>Запрос активации промокода #{req_id}</b>\n"
-        f"• Статус: <b>{decision_label}</b>\n"
-        f"• Клиент: {user_tag} | ID: <code>{uid}</code>\n"
-        f"• Промокод: <code>{code_upper}</code> (скидка <b>-{disc_pct}%</b>)\n"
-        f"• Данные заказа:{order_details}\n\n"
-        f"{summary_block}"
-    )
-    for staff_id, msg_id in (req.get("staff_msgs") or {}).items():
-        try:
-            await bot.edit_message_text(
-                chat_id=staff_id,
-                message_id=msg_id,
-                text=updated_text,
-                reply_markup=None,
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-
-
-@router.callback_query(F.data.startswith("promo_approve_"))
-async def cb_promo_approve(callback: CallbackQuery, state: FSMContext):
-    if not is_staff(callback.from_user.id):
-        await callback.answer("⛔ Недостаточно прав", show_alert=True)
-        return
-
-    try:
-        req_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.answer("Ошибка", show_alert=True)
-        return
-
-    req = PROMO_REQUESTS.get(req_id)
-    if not req:
-        await callback.answer("Заявка не найдена", show_alert=True)
-        return
-
-    if req_id in PROMO_DECIDED_REQUESTS:
-        await callback.answer("Заявка уже обработана", show_alert=True)
-        return
-
-    uid = req["user_id"]
-    if uid in BANNED_USERS:
-        await callback.answer("Пользователь заблокирован", show_alert=True)
-        return
-
-    if _get_client_paid_orders(uid) or uid in USED_PROMO_USERS or uid in USER_APPLIED_PROMOS:
-        PROMO_DECIDED_REQUESTS.add(req_id)
-        req["status"] = "rejected_already_used"
-        await _finalize_promo_staff_message(callback.bot, req, "❌ Отменено (промокод уже использован или заказ оплачен)")
-        await callback.answer("У клиента уже оплачен заказ или использован промокод", show_alert=True)
-        return
-
-    PROMO_DECIDED_REQUESTS.add(req_id)
-    req["status"] = "approved"
-    USED_PROMO_USERS.add(uid)
-    queue_db(("promo_used_add", uid, req["code"], req["discount_pct"]))
-
-    # Берём актуальную полную сумму заказа или счёта (без повторного дисконтирования)
-    bill = USER_BILLS.get(uid) or {}
-    raw_full = bill.get("original_total_price") or bill.get("total_price") or req.get("base_full_price") or 0
-    if not raw_full and callback.from_user.id == uid:
-        st_data = await state.get_data()
-        raw_full = st_data.get("original_total_price") or st_data.get("total_price") or 0
-
-    disc_pct = int(req["discount_pct"])
-    if float(raw_full) > 0:
-        discounted_price = _apply_discount_once(raw_full, disc_pct)
-    else:
-        discounted_price = 0
-
-    USER_APPLIED_PROMOS[uid] = {
-        "code": req["code"],
-        "discount_pct": disc_pct,
-        "original_price": raw_full,
-        "discounted_price": discounted_price,
-    }
-
-    if uid in USER_BILLS:
-        USER_BILLS[uid]["original_total_price"] = raw_full
-        USER_BILLS[uid]["total_price"] = discounted_price
-        USER_BILLS[uid]["promo_discount_pct"] = disc_pct
-        queue_db(("bill_set", uid, dict(USER_BILLS[uid])))
-
-    if callback.from_user.id == uid:
-        await state.update_data(
-            original_total_price=raw_full,
-            total_price=discounted_price,
-            promo_discount_pct=disc_pct,
-        )
-
-    PROBLEM_USERS.pop(uid, None)
-    await _finalize_promo_staff_message(callback.bot, req, f"✅ Подтверждено (-{disc_pct}%)")
-
-    if float(raw_full) > 0:
-        price_line = (
-            f"\nСумма заказа: <s>{_format_num(raw_full)}$</s> → "
-            f"<b>{_format_num(discounted_price)}$</b> <b>(-{disc_pct}%)</b>"
-        )
-    else:
-        price_line = ""
-
-    try:
-        await callback.bot.send_message(
-            chat_id=uid,
-            text=(
-                f"🎉 <b>Поздравляем! Вы получили скидку -{disc_pct}% на всю сумму заказа!</b>"
-                f"{price_line}"
-            ),
-            reply_markup=_build_promo_back_keyboard(),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.warning(f"Не удалось уведомить клиента {uid} о подтверждении промокода: {e}")
-
-    await callback.answer(f"✅ Промокод подтверждён (-{disc_pct}%)", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("promo_reject_"))
-async def cb_promo_reject(callback: CallbackQuery):
-    if not is_staff(callback.from_user.id):
-        await callback.answer("⛔ Недостаточно прав", show_alert=True)
-        return
-
-    try:
-        req_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.answer("Ошибка", show_alert=True)
-        return
-
-    req = PROMO_REQUESTS.get(req_id)
-    if not req:
-        await callback.answer("Заявка не найдена", show_alert=True)
-        return
-
-    if req_id in PROMO_DECIDED_REQUESTS:
-        await callback.answer("Заявка уже обработана", show_alert=True)
-        return
-
-    PROMO_DECIDED_REQUESTS.add(req_id)
-    req["status"] = "rejected"
-    uid = req["user_id"]
-
-    await _finalize_promo_staff_message(callback.bot, req, "❌ Отменено")
-
-    if uid not in BANNED_USERS:
-        try:
-            await callback.bot.send_message(
-                chat_id=uid,
-                text=(
-                    "❌ <b>Вы не выполнили условия акции для активации скидки.</b>\n\n"
-                    "Условия не соблюдены — напишите менеджеру (актуальный юзернейм менеджера "
-                    "вы всегда можете найти в нашем телеграм канале) и выполните условия, чтобы получить персональную скидку."
-                ),
-                reply_markup=_build_promo_back_keyboard(),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось уведомить клиента {uid} об отклонении промокода: {e}")
-
-    await callback.answer("❌ Промокод отклонён", show_alert=True)
-
-
 # === КЛИЕНТСКИЕ КНОПКИ ПОД СООБЩЕНИЕМ ОТ МЕНЕДЖЕРА ===
 @router.callback_query(F.data == "client_reply_manager")
 async def cb_client_reply_manager(callback: CallbackQuery, state: FSMContext):
@@ -3301,10 +2656,6 @@ async def cb_client_reply_manager(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "client_close_dialog")
 async def cb_client_close_dialog(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer("🔒 Обращение закрыто")
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _close_dialog_state(user_id)
     for t in TICKETS.values():
@@ -3314,6 +2665,7 @@ async def cb_client_close_dialog(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    await callback.answer("🔒 Обращение закрыто")
     await show_main_menu(callback, state)
 
 
@@ -4137,7 +3489,7 @@ async def create_cryptobot_invoice(amount_usd: float, description: str):
     headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
     payload = {
         "asset": "USDT",
-        "amount": str(_format_num(amount_usd)),
+        "amount": str(amount_usd),
         "description": description,
         "payload": "order_payment",
     }
@@ -4352,17 +3704,12 @@ async def restore_abandoned_reminders(bot: Bot):
 # === ОБРАБОТЧИКИ КОМАНД ===
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
     await show_main_menu(message, state)
 
 
 @router.message(Command("restart"))
 async def cmd_restart(message: Message, state: FSMContext):
-    await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
-    try:
-        await message.reply("🔄 Бот перезапущен, состояние очищено.")
-    except Exception:
-        pass
+    await message.reply("🔄 Бот перезапущен, состояние очищено.")
     await show_main_menu(message, state)
 
 
@@ -4390,8 +3737,8 @@ async def cmd_my_orders_msg(message: Message, state: FSMContext):
         text = "📦 <b>История ваших заказов:</b>\n\n"
         for idx, ord_data in enumerate(orders, 1):
             price_str = (
-                f"{_format_num(ord_data['total_price'])}$"
-                if float(ord_data["total_price"]) > 0
+                f"{ord_data['total_price']}$"
+                if ord_data["total_price"] > 0
                 else "Индивидуально"
             )
             text += (
@@ -4431,10 +3778,6 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "back_home")
 async def back_home(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _cancel_abandoned_reminder(user_id)
@@ -4443,10 +3786,6 @@ async def back_home(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "reputation")
 async def show_reputation(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     _touch_user_activity(callback.from_user.id, callback.from_user.username)
     completed, in_progress, new_requests = get_reputation_stats()
     text = (
@@ -4468,10 +3807,6 @@ async def show_reputation(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "my_orders")
 async def show_my_orders(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
     orders = _get_client_paid_orders(user_id)
@@ -4484,8 +3819,8 @@ async def show_my_orders(callback: CallbackQuery, state: FSMContext):
         text = "📦 <b>История ваших заказов:</b>\n\n"
         for idx, ord_data in enumerate(orders, 1):
             price_str = (
-                f"{_format_num(ord_data['total_price'])}$"
-                if float(ord_data["total_price"]) > 0
+                f"{ord_data['total_price']}$"
+                if ord_data["total_price"] > 0
                 else "Индивидуально"
             )
             text += (
@@ -4504,10 +3839,6 @@ async def show_my_orders(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "contact_admin")
 async def contact_admin_info(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     _touch_user_activity(callback.from_user.id, callback.from_user.username)
     await state.set_state(SupportForm.reason)
     keyboard = InlineKeyboardMarkup(
@@ -4600,10 +3931,6 @@ async def process_support_photo(message: Message, state: FSMContext):
 
 @router.callback_query(SupportForm.photo, F.data == "skip_support_photo")
 async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     data = await state.get_data()
     user = callback.from_user
     _touch_user_activity(user.id, user.username)
@@ -4642,10 +3969,6 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
 @router.callback_query(F.data == "start_order")
 async def process_start_order(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "catalog", callback.from_user.username)
@@ -4662,10 +3985,6 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(OrderForm.service, F.data.startswith("srv_"))
 async def process_service(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     parts = callback.data.split("_")
     price = int(parts[-1])
     service_name = " ".join(parts[1:-1]).replace("_", " ")
@@ -4811,10 +4130,6 @@ async def process_special_task(message: Message, state: FSMContext):
 
 @router.callback_query(OrderForm.country, F.data.startswith("country_"))
 async def process_country(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     c_code = callback.data.split("_")[1]
     names = {
         "Russia": "Россия",
@@ -4926,19 +4241,11 @@ async def process_photo(message: Message, state: FSMContext):
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     await _show_urgency_step(callback, state)
 
 
 @router.callback_query(OrderForm.urgency, F.data.startswith("urg_"))
 async def process_urgency(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     parts = callback.data.split("_")
     urg_price = int(parts[2])
     urg_map = {
@@ -4953,10 +4260,6 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "submit_special_order")
 async def process_special_order_submit(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user = callback.from_user
     user_id = user.id
     data = await state.get_data()
@@ -4976,6 +4279,7 @@ async def process_special_order_submit(callback: CallbackQuery, state: FSMContex
         data=data,
     )
 
+    # Особый заказ на расчет не попадает в «Мои заказы» клиента до оплаты
     order_idx = len(USER_ORDERS.get(user_id) or [])
 
     user_tag = f"@{user.username}" if user.username else "без @username"
@@ -5044,10 +4348,6 @@ async def process_special_order_submit(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "go_to_payment")
 async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _track_user_step(user_id, "payment", callback.from_user.username)
     data, country, curr_code, curr_symbol, total_price, service_name = (
@@ -5058,6 +4358,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         await process_special_order_submit(callback, state)
         return
 
+    # Вход на этап выбора способа оплаты: запускаем одноразовый контроль + 15-минутный таймер
     _enter_payment_method_step(callback.bot, user_id)
 
     remind_at = datetime.datetime.now() + datetime.timedelta(minutes=30)
@@ -5065,21 +4366,12 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     _schedule_abandoned_reminder(callback.bot, user_id, remind_at)
 
     rate = await get_exchange_rate(curr_code)
-    local_amount = round(float(total_price) * rate) if float(total_price) > 0 else 0
-    orig_price = data.get("original_total_price") or total_price
-    disc_pct = int(data.get("promo_discount_pct", 0) or 0)
-    has_disc = disc_pct > 0 and float(orig_price) > float(total_price or 0)
+    local_amount = round(total_price * rate) if total_price > 0 else 0
 
-    is_crypto_only = float(total_price) > 500
+    is_crypto_only = total_price > 500
 
     if is_crypto_only:
-        if has_disc:
-            price_note = (
-                f"Сумма: <s>{_format_num(orig_price)} USDT</s> → "
-                f"<b>{_format_num(total_price)} USDT</b> <b>(-{disc_pct}%)</b>"
-            )
-        else:
-            price_note = f"Сумма: <b>{_format_num(total_price)} USDT</b>"
+        price_note = f"Сумма: <b>{total_price} USDT</b>"
         payment_text = (
             "⏳ <b>Оплата заказа</b>\n"
             "Время на завершение: <b><u>20:00</u></b>\n\n"
@@ -5105,13 +4397,6 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🎟 Промокод",
-                        callback_data="promo_code_entry",
-                        style="primary",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
                         text="💬 Нужна помощь",
                         callback_data="payment_help_manager",
                         style="danger",
@@ -5128,23 +4413,13 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         bill_prefix = (
             f"🧾 <b>Счет на {service_name}</b>\n" if user_id in USER_BILLS else ""
         )
-        if has_disc:
-            sum_line = (
-                f"Сумма: <s>{_format_num(orig_price)}$</s> → "
-                f"<b>{_format_num(total_price)}$</b> <b>(-{disc_pct}%)</b> "
-                f"<i>(≈ {local_amount:,} {curr_symbol})</i>"
-            )
-        else:
-            sum_line = (
-                f"Сумма: <b>{_format_num(total_price)}$</b> <i>(≈ {local_amount:,}"
-                f" {curr_symbol})</i>"
-            )
         payment_text = (
             "⏳ <b>Оплата заказа</b>\n"
             "Время на завершение: <b><u>20:00</u></b>\n\n"
             f"{bill_prefix}"
             f"💳 <b>Способ оплаты ({country})</b>\n"
-            f"{sum_line}"
+            f"Сумма: <b>{total_price}$</b> <i>(≈ {local_amount:,}"
+            f" {curr_symbol})</i>"
         )
         keyboard = build_payment_keyboard(country, back_callback="order_back_step")
 
@@ -5153,22 +4428,15 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_card_option")
 async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
     await state.update_data(payment_method="card")
-    data, country, curr_code, curr_symbol, total_price, _ = (
+    _, country, curr_code, curr_symbol, total_price, _ = (
         await get_payment_context(user_id, state)
     )
     rate = await get_exchange_rate(curr_code)
-    local_amount = round(float(total_price) * rate)
-    orig_price = data.get("original_total_price") or total_price
-    disc_pct = int(data.get("promo_discount_pct", 0) or 0)
-    has_disc = disc_pct > 0 and float(orig_price) > float(total_price or 0)
+    local_amount = round(total_price * rate)
 
     card = get_next_card(country)
     if not card:
@@ -5213,21 +4481,10 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
     }
     header_title = header_map.get(country, "Оплата")
 
-    if has_disc:
-        amount_line = (
-            f"• Итого к оплате: <b>{local_amount:,} {curr_symbol}</b> "
-            f"(<s>{_format_num(orig_price)}$</s> → <b>{_format_num(total_price)}$</b> "
-            f"<b>-{disc_pct}%</b>)"
-        )
-    else:
-        amount_line = (
-            f"• Итого к оплате: <b>{local_amount:,} {curr_symbol}</b>"
-            f" <i>({_format_num(total_price)}$)</i>"
-        )
-
     text = (
         f"💳 <b>{header_title} ({country})</b>\n\n"
-        f"{amount_line}\n\n"
+        f"• Итого к оплате: <b>{local_amount:,} {curr_symbol}</b>"
+        f" <i>({total_price}$)</i>\n\n"
         f"⚠️ <b>Переводите строго на реквизиты ниже:</b>\n\n"
         f"<b>Банк:</b> {card['bank']}\n"
         f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
@@ -5284,24 +4541,16 @@ async def process_payment_help_manager(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
-    data, _, _, _, total_price, _ = await get_payment_context(
+    _, _, _, _, total_price, _ = await get_payment_context(
         user_id, state
     )
-    if float(total_price) <= 0:
+    if total_price <= 0:
         total_price = 100
 
-    orig_price = data.get("original_total_price") or total_price
-    disc_pct = int(data.get("promo_discount_pct", 0) or 0)
-    has_disc = disc_pct > 0 and float(orig_price) > float(total_price)
-
-    pay_url, inv_id = await create_cryptobot_invoice(float(total_price), "Оплата услуг")
+    pay_url, inv_id = await create_cryptobot_invoice(total_price, "Оплата услуг")
     if not pay_url:
         await callback.answer("❌ Сервис недоступен.", show_alert=True)
         return
@@ -5328,18 +4577,10 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
             ],
         ]
     )
-    if has_disc:
-        sum_txt = (
-            f"<s>{_format_num(orig_price)} USDT</s> → "
-            f"<b>{_format_num(total_price)} USDT</b> <b>(-{disc_pct}%)</b>"
-        )
-    else:
-        sum_txt = f"<b>{_format_num(total_price)} USDT</b>"
-
     text = (
-        f"🤖 <b>CryptoBot</b>\n\nСумма: {sum_txt}\n\nПосле оплаты"
+        "🤖 <b>CryptoBot</b>\n\nСумма: <b>{total_price} USDT</b>\n\nПосле оплаты"
         " нажмите кнопку проверки:"
-    )
+    ).format(total_price=total_price)
     await render_step(callback, state, "payment.jpg", text, keyboard)
 
 
@@ -5357,10 +4598,6 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user = callback.from_user
     _reset_payment_step_tracking(user.id, leave_step=True)
     _cancel_abandoned_reminder(user.id)
@@ -5433,10 +4670,6 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "crypto_expert")
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5484,10 +4717,6 @@ async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_crypto_"))
 async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5532,26 +4761,17 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
         await render_step(callback, state, "payment.jpg", text, keyboard)
         return
 
-    data, _, curr_code, curr_symbol, total_price, _ = await get_payment_context(
+    _, _, curr_code, curr_symbol, total_price, _ = await get_payment_context(
         user_id, state
     )
     rate = await get_exchange_rate(curr_code)
-    local_amount = round(float(total_price) * rate) if float(total_price) > 0 else 0
-    orig_price = data.get("original_total_price") or total_price
-    disc_pct = int(data.get("promo_discount_pct", 0) or 0)
-    has_disc = disc_pct > 0 and float(orig_price) > float(total_price or 0)
+    local_amount = round(total_price * rate) if total_price > 0 else 0
 
-    if float(total_price) > 0 and has_disc:
-        price_str = (
-            f"<s>{_format_num(orig_price)}$</s> → <b>{_format_num(total_price)}$</b> "
-            f"<b>(-{disc_pct}%)</b> <i>(≈ {local_amount:,} {curr_symbol})</i>"
-        )
-    elif float(total_price) > 0:
-        price_str = (
-            f"<b>{_format_num(total_price)}$</b> <i>(≈ {local_amount:,} {curr_symbol})</i>"
-        )
-    else:
-        price_str = "<b>Индивидуальный расчет</b>"
+    price_str = (
+        f"<b>{total_price}$</b> <i>(≈ {local_amount:,} {curr_symbol})</i>"
+        if total_price > 0
+        else "<b>Индивидуальный расчет</b>"
+    )
 
     text = (
         f"💳 <b>Оплата {net_info['name']}</b>\n\n"
@@ -5581,10 +4801,6 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.answer()
-    except Exception:
-        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "receipt", callback.from_user.username)
@@ -5819,27 +5035,6 @@ async def fallback_order_photos(message: Message):
     await message.reply(
         "⚠️ Пожалуйста, отправьте фото цели или нажмите кнопку «Готово» /"
         " «Пропустить»."
-    )
-
-
-@router.message(OrderForm.promo_code)
-async def fallback_order_promo_code(message: Message, state: FSMContext):
-    raw = (message.text or "").strip()
-    cmd_head = raw.split()[0].lower().split("@")[0] if raw else ""
-    if cmd_head in ("/start", "/restart"):
-        await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
-        if cmd_head == "/restart":
-            try:
-                await message.reply("🔄 Бот перезапущен, состояние очищено.")
-            except Exception:
-                pass
-        await show_main_menu(message, state)
-        return
-    await message.reply(
-        "❌ Неправильный промокод, АРЕНУ не обманешь)\n\n"
-        "Введите промокод <b>одним словом</b> или нажмите кнопку возврата:",
-        reply_markup=_build_promo_back_keyboard(),
-        parse_mode="HTML",
     )
 
 
