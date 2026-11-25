@@ -68,6 +68,7 @@ class OrderForm(StatesGroup):
     target_data = State()
     photos = State()
     urgency = State()
+    summary = State()
     promo_code = State()
     payment = State()
     receipt = State()
@@ -168,6 +169,24 @@ STEP_RANKS = {
 }
 
 
+async def _push_nav_step(state: FSMContext, step_name: str):
+    data = await state.get_data()
+    history = list(data.get("nav_history") or [])
+    if not history or history[-1] != step_name:
+        history.append(step_name)
+    await state.update_data(nav_history=history)
+
+
+async def _pop_nav_step(state: FSMContext, current_step_name: str | None = None) -> str | None:
+    data = await state.get_data()
+    history = list(data.get("nav_history") or [])
+    while history and history[-1] == current_step_name:
+        history.pop()
+    prev_step = history.pop() if history else None
+    await state.update_data(nav_history=history)
+    return prev_step
+
+
 def _format_num(val: float | int) -> str:
     num = float(val)
     if num.is_integer():
@@ -256,7 +275,7 @@ def _record_problem_user(
     clean_data = {}
     if data:
         for k, v in data.items():
-            if k in ("bot_msg_id", "invoice_id", "photos") or not v:
+            if k in ("bot_msg_id", "invoice_id", "photos", "nav_history") or not v:
                 continue
             clean_data[k] = v
     PROBLEM_USERS[user_id] = {
@@ -2099,10 +2118,33 @@ async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
 
 
 # === ПОСЛЕДОВАТЕЛЬНЫЙ ВОЗВРАТ НА ПРЕДЫДУЩИЙ ШАГ ОФОРМЛЕНИЯ ЗАКАЗА ===
-async def _show_debt_info_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_catalog_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
+    data = await state.get_data()
+    _track_user_step(
+        event.from_user.id,
+        "catalog",
+        event.from_user.username,
+        service_name=data.get("service_name"),
+    )
+    await state.set_state(OrderForm.service)
+    if record_history:
+        await _push_nav_step(state, "service")
+    text = (
+        "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
+    )
+    await render_step(event, state, "catalog.jpg", text, build_catalog_keyboard())
+
+
+async def _show_debt_info_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     _track_user_step(event.from_user.id, "debt_info", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.debt_info)
+    if record_history:
+        await _push_nav_step(state, "debt_info")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -2119,10 +2161,14 @@ async def _show_debt_info_step(event: Message | CallbackQuery, state: FSMContext
     await render_step(event, state, "catalog.jpg", text, keyboard)
 
 
-async def _show_debt_wallet_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_debt_wallet_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     _track_user_step(event.from_user.id, "debt_wallet", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.debt_wallet)
+    if record_history:
+        await _push_nav_step(state, "debt_wallet")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -2140,10 +2186,14 @@ async def _show_debt_wallet_step(event: Message | CallbackQuery, state: FSMConte
     await render_step(event, state, "catalog.jpg", text, keyboard)
 
 
-async def _show_special_task_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_special_task_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     _track_user_step(event.from_user.id, "special_task", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.special_task)
+    if record_history:
+        await _push_nav_step(state, "special_task")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -2161,11 +2211,15 @@ async def _show_special_task_step(event: Message | CallbackQuery, state: FSMCont
     await render_step(event, state, "catalog.jpg", text, keyboard)
 
 
-async def _show_target_location_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_target_location_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     selected = data.get("country") or USER_LAST_COUNTRY.get(event.from_user.id, "Россия")
     _track_user_step(event.from_user.id, "target_location", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.target_location)
+    if record_history:
+        await _push_nav_step(state, "target_location")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -2183,10 +2237,14 @@ async def _show_target_location_step(event: Message | CallbackQuery, state: FSMC
     await render_step(event, state, "location.jpg", text, keyboard)
 
 
-async def _show_target_data_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_target_data_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     _track_user_step(event.from_user.id, "target_data", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.target_data)
+    if record_history:
+        await _push_nav_step(state, "target_data")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -2204,11 +2262,15 @@ async def _show_target_data_step(event: Message | CallbackQuery, state: FSMConte
     await render_step(event, state, "target_data.jpg", text, keyboard)
 
 
-async def _show_photos_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_photos_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     photos = data.get("photos") or []
     _track_user_step(event.from_user.id, "photos", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.photos)
+    if record_history:
+        await _push_nav_step(state, "photos")
     if photos:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -2253,10 +2315,14 @@ async def _show_photos_step(event: Message | CallbackQuery, state: FSMContext):
     await render_step(event, state, "photos.jpg", text, keyboard)
 
 
-async def _show_urgency_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_urgency_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     data = await state.get_data()
     _track_user_step(event.from_user.id, "urgency", event.from_user.username, service_name=data.get("service_name"))
     await state.set_state(OrderForm.urgency)
+    if record_history:
+        await _push_nav_step(state, "urgency")
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -2291,10 +2357,16 @@ async def _show_urgency_step(event: Message | CallbackQuery, state: FSMContext):
     await render_step(event, state, "urgency.jpg", text, keyboard)
 
 
-async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
+async def _show_summary_step(
+    event: Message | CallbackQuery, state: FSMContext, record_history: bool = True
+):
     user_id = event.from_user.id
     data = await state.get_data()
     _track_user_step(user_id, "summary", event.from_user.username, service_name=data.get("service_name"))
+    await state.set_state(OrderForm.summary)
+    if record_history:
+        await _push_nav_step(state, "summary")
+
     base_service_price = data.get("service_price", 0)
     urg_price = data.get("urgency_price", 0)
     urgency = data.get("urgency") or "📅 2-5 дней"
@@ -2365,6 +2437,37 @@ async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
     await render_step(event, state, "summary.jpg", summary_text, keyboard)
 
 
+async def _navigate_to_step_key(
+    callback: CallbackQuery, state: FSMContext, step_key: str
+):
+    data = await state.get_data()
+    service_name = data.get("service_name") or ""
+    if step_key == "service":
+        await _show_catalog_step(callback, state, record_history=False)
+    elif step_key == "debt_info":
+        await _show_debt_info_step(callback, state, record_history=False)
+    elif step_key == "debt_wallet":
+        await _show_debt_wallet_step(callback, state, record_history=False)
+    elif step_key == "special_task":
+        await _show_special_task_step(callback, state, record_history=False)
+    elif step_key == "country":
+        await show_country_selection(
+            callback, state, service_name, data.get("service_price", 0), record_history=False
+        )
+    elif step_key == "target_location":
+        await _show_target_location_step(callback, state, record_history=False)
+    elif step_key == "target_data":
+        await _show_target_data_step(callback, state, record_history=False)
+    elif step_key == "photos":
+        await _show_photos_step(callback, state, record_history=False)
+    elif step_key == "urgency":
+        await _show_urgency_step(callback, state, record_history=False)
+    elif step_key == "summary":
+        await _show_summary_step(callback, state, record_history=False)
+    else:
+        await _show_catalog_step(callback, state, record_history=False)
+
+
 @router.callback_query(F.data == "order_back_step")
 async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
     try:
@@ -2385,42 +2488,62 @@ async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
             )
         )
 
+    state_to_key = {
+        OrderForm.service.state: "service",
+        OrderForm.debt_info.state: "debt_info",
+        OrderForm.debt_wallet.state: "debt_wallet",
+        OrderForm.special_task.state: "special_task",
+        OrderForm.country.state: "country",
+        OrderForm.target_location.state: "target_location",
+        OrderForm.target_data.state: "target_data",
+        OrderForm.photos.state: "photos",
+        OrderForm.urgency.state: "urgency",
+        OrderForm.summary.state: "summary",
+        OrderForm.payment.state: "payment",
+        OrderForm.receipt.state: "receipt",
+    }
+    current_key = state_to_key.get(current_state)
+    prev_step = await _pop_nav_step(state, current_key)
+
+    if prev_step and prev_step != current_key:
+        await _navigate_to_step_key(callback, state, prev_step)
+        return
+
+    # Резервный детерминированный переход назад, если стек пуст
     if current_state == OrderForm.debt_info.state:
-        await state.set_state(OrderForm.service)
-        await render_step(callback, state, "catalog.jpg", "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:", build_catalog_keyboard())
+        await _show_catalog_step(callback, state, record_history=False)
     elif current_state == OrderForm.debt_wallet.state:
-        await _show_debt_info_step(callback, state)
+        await _show_debt_info_step(callback, state, record_history=False)
     elif current_state == OrderForm.special_task.state:
-        await state.set_state(OrderForm.service)
-        await render_step(callback, state, "catalog.jpg", "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:", build_catalog_keyboard())
+        await _show_catalog_step(callback, state, record_history=False)
     elif current_state == OrderForm.country.state:
         if service_name == "Вернуть долг":
-            await _show_debt_wallet_step(callback, state)
+            await _show_debt_wallet_step(callback, state, record_history=False)
         elif service_name == "Особый заказ":
-            await _show_special_task_step(callback, state)
+            await _show_special_task_step(callback, state, record_history=False)
         else:
-            await state.set_state(OrderForm.service)
-            await render_step(callback, state, "catalog.jpg", "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:", build_catalog_keyboard())
+            await _show_catalog_step(callback, state, record_history=False)
     elif current_state == OrderForm.target_location.state:
-        await state.set_state(OrderForm.country)
-        await show_country_selection(callback, state, service_name, data.get("service_price", 0))
+        await show_country_selection(
+            callback, state, service_name, data.get("service_price", 0), record_history=False
+        )
     elif current_state == OrderForm.target_data.state:
-        await _show_target_location_step(callback, state)
+        await _show_target_location_step(callback, state, record_history=False)
     elif current_state == OrderForm.photos.state:
-        await _show_target_data_step(callback, state)
+        await _show_target_data_step(callback, state, record_history=False)
     elif current_state == OrderForm.urgency.state:
-        await _show_photos_step(callback, state)
-    else:
-        if data.get("urgency"):
-            await _show_summary_step(callback, state)
+        await _show_photos_step(callback, state, record_history=False)
+    elif current_state == OrderForm.summary.state:
+        await _show_urgency_step(callback, state, record_history=False)
+    elif current_state == OrderForm.payment.state:
+        if service_name and (service_name or "").strip().lower() != "особый заказ":
+            await _show_summary_step(callback, state, record_history=False)
         elif data.get("country"):
-            await _show_urgency_step(callback, state)
-        elif service_name:
-            await state.set_state(OrderForm.country)
-            await show_country_selection(callback, state, service_name, data.get("service_price", 0))
+            await _show_urgency_step(callback, state, record_history=False)
         else:
-            await state.set_state(OrderForm.service)
-            await render_step(callback, state, "catalog.jpg", "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:", build_catalog_keyboard())
+            await _show_catalog_step(callback, state, record_history=False)
+    else:
+        await _show_catalog_step(callback, state, record_history=False)
 
 
 # === АДМИНСКИЕ И МЕНЕДЖЕРСКИЕ КОМАНДЫ ===
@@ -2954,15 +3077,7 @@ async def _restore_or_go_order_on_back(callback: CallbackQuery, state: FSMContex
         await process_go_to_payment(callback, state)
     else:
         _reset_payment_step_tracking(user_id, leave_step=True)
-        _track_user_step(user_id, "catalog", callback.from_user.username)
-        await state.set_state(OrderForm.service)
-        await render_step(
-            callback,
-            state,
-            "catalog.jpg",
-            "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:",
-            build_catalog_keyboard(),
-        )
+        await _show_catalog_step(callback, state, record_history=True)
 
 
 @router.callback_query(
@@ -4396,12 +4511,7 @@ async def cmd_restart(message: Message, state: FSMContext):
 
 @router.message(Command("order"))
 async def cmd_order(message: Message, state: FSMContext):
-    _track_user_step(message.from_user.id, "catalog", message.from_user.username)
-    await state.set_state(OrderForm.service)
-    text = (
-        "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
-    )
-    await render_step(message, state, "catalog.jpg", text, build_catalog_keyboard())
+    await _show_catalog_step(message, state, record_history=True)
 
 
 @router.message(Command("my_orders"))
@@ -4676,16 +4786,9 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
         pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
-    _track_user_step(user_id, "catalog", callback.from_user.username)
     _cancel_abandoned_reminder(user_id)
-
-    await state.set_state(OrderForm.service)
-    text = (
-        "🛒 <b>Каталог услуг</b>\n\nВыберите подходящий вариант из списка ниже:"
-    )
-    await render_step(
-        callback, state, "catalog.jpg", text, build_catalog_keyboard()
-    )
+    await state.update_data(nav_history=["service"])
+    await _show_catalog_step(callback, state, record_history=False)
 
 
 @router.callback_query(OrderForm.service, F.data.startswith("srv_"))
@@ -4705,7 +4808,11 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
         callback.from_user.username,
         service_name=service_name,
     )
-    await state.update_data(service_name=service_name, service_price=price)
+    await state.update_data(
+        service_name=service_name,
+        service_price=price,
+        nav_history=["service"],
+    )
 
     if service_name == "Вернуть долг":
         _record_problem_user(
@@ -4715,7 +4822,7 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
             query_text=service_name,
             data={"service_name": service_name, "service_price": price},
         )
-        await _show_debt_info_step(callback, state)
+        await _show_debt_info_step(callback, state, record_history=True)
     elif service_name == "Особый заказ":
         _record_problem_user(
             user_id=callback.from_user.id,
@@ -4724,10 +4831,9 @@ async def process_service(callback: CallbackQuery, state: FSMContext):
             query_text=service_name,
             data={"service_name": service_name, "service_price": price},
         )
-        await _show_special_task_step(callback, state)
+        await _show_special_task_step(callback, state, record_history=True)
     else:
-        await state.set_state(OrderForm.country)
-        await show_country_selection(callback, state, service_name, price)
+        await show_country_selection(callback, state, service_name, price, record_history=True)
 
 
 async def show_country_selection(
@@ -4735,6 +4841,7 @@ async def show_country_selection(
     state: FSMContext,
     service_name: str,
     price: int,
+    record_history: bool = True,
 ):
     _track_user_step(
         event.from_user.id,
@@ -4742,6 +4849,9 @@ async def show_country_selection(
         event.from_user.username,
         service_name=service_name,
     )
+    await state.set_state(OrderForm.country)
+    if record_history:
+        await _push_nav_step(state, "country")
     countries = [
         ("🇷🇺 Россия", "country_Russia"),
         ("🇧🇾 Беларусь", "country_Belarus"),
@@ -4798,14 +4908,13 @@ async def process_debt_info(message: Message, state: FSMContext):
         query_text=data.get("debt_info") or "",
         data=data,
     )
-    await _show_debt_wallet_step(message, state)
+    await _show_debt_wallet_step(message, state, record_history=True)
 
 
 @router.message(OrderForm.debt_wallet, F.text)
 async def process_debt_wallet(message: Message, state: FSMContext):
     _track_user_step(message.from_user.id, "debt_wallet", message.from_user.username)
     await state.update_data(debt_wallet=message.text.strip())
-    await state.set_state(OrderForm.country)
     data = await state.get_data()
     _record_problem_user(
         user_id=message.from_user.id,
@@ -4815,7 +4924,7 @@ async def process_debt_wallet(message: Message, state: FSMContext):
         data=data,
     )
     await show_country_selection(
-        message, state, data.get("service_name"), data.get("service_price")
+        message, state, data.get("service_name"), data.get("service_price"), record_history=True
     )
 
 
@@ -4823,7 +4932,6 @@ async def process_debt_wallet(message: Message, state: FSMContext):
 async def process_special_task(message: Message, state: FSMContext):
     _track_user_step(message.from_user.id, "special_task", message.from_user.username)
     await state.update_data(special_task=message.text.strip())
-    await state.set_state(OrderForm.country)
     data = await state.get_data()
     _record_problem_user(
         user_id=message.from_user.id,
@@ -4833,7 +4941,7 @@ async def process_special_task(message: Message, state: FSMContext):
         data=data,
     )
     await show_country_selection(
-        message, state, data.get("service_name"), data.get("service_price")
+        message, state, data.get("service_name"), data.get("service_price"), record_history=True
     )
 
 
@@ -4880,7 +4988,7 @@ async def process_country(callback: CallbackQuery, state: FSMContext):
             query_text=data.get("debt_info") or "",
             data=data,
         )
-    await _show_target_location_step(callback, state)
+    await _show_target_location_step(callback, state, record_history=True)
 
 
 @router.message(OrderForm.target_location, F.text)
@@ -4904,7 +5012,7 @@ async def process_target_location(message: Message, state: FSMContext):
             query_text=data.get("debt_info") or "",
             data=data,
         )
-    await _show_target_data_step(message, state)
+    await _show_target_data_step(message, state, record_history=True)
 
 
 @router.message(OrderForm.target_data, F.text)
@@ -4930,7 +5038,7 @@ async def process_target_data(message: Message, state: FSMContext):
             query_text=data.get("debt_info") or "",
             data=data,
         )
-    await _show_photos_step(message, state)
+    await _show_photos_step(message, state, record_history=True)
 
 
 @router.message(OrderForm.photos, F.photo)
@@ -4949,7 +5057,7 @@ async def process_photo(message: Message, state: FSMContext):
         photos.append(photo_id)
         await state.update_data(photos=photos)
 
-    await _show_photos_step(message, state)
+    await _show_photos_step(message, state, record_history=False)
 
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
@@ -4958,7 +5066,7 @@ async def finish_photos(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
-    await _show_urgency_step(callback, state)
+    await _show_urgency_step(callback, state, record_history=True)
 
 
 @router.callback_query(OrderForm.urgency, F.data.startswith("urg_"))
@@ -4976,7 +5084,7 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
     }
     urgency = urg_map.get(parts[1], "📅 2-5 дней")
     await state.update_data(urgency=urgency, urgency_price=urg_price)
-    await _show_summary_step(callback, state)
+    await _show_summary_step(callback, state, record_history=True)
 
 
 @router.callback_query(F.data == "submit_special_order")
@@ -5078,6 +5186,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         pass
     user_id = callback.from_user.id
     await state.set_state(OrderForm.payment)
+    await _push_nav_step(state, "payment")
     _track_user_step(user_id, "payment", callback.from_user.username)
     data, country, curr_code, curr_symbol, total_price, service_name = (
         await get_payment_context(user_id, state)
