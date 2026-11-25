@@ -1614,7 +1614,7 @@ async def get_exchange_rate(target_currency: str) -> float:
     url = "https://open.er-api.com/v6/latest/USD"
     try:
         async with ClientSession() as session:
-            async with session.get(url, timeout=5) as response:
+            async with session.get(url, timeout=2) as response:
                 if response.status == 200:
                     data = await response.json()
                     rates = data.get("rates", {})
@@ -1895,6 +1895,12 @@ async def render_step(
     text: str,
     reply_markup: InlineKeyboardMarkup,
 ):
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     bot = event.bot
     chat_id = (
         event.chat.id if isinstance(event, Message) else event.message.chat.id
@@ -1912,7 +1918,6 @@ async def render_step(
         photo_source = FSInputFile(banner_path)
 
     if isinstance(event, CallbackQuery):
-        await event.answer()
         msg = event.message
         if photo_source:
             try:
@@ -2026,12 +2031,24 @@ async def render_step(
         await state.update_data(bot_msg_id=new_msg.message_id)
 
 
+async def _full_reset_user_session(user_id: int, state: FSMContext, username: str | None = None):
+    await state.clear()
+    _reset_payment_step_tracking(user_id, leave_step=True)
+    _cancel_abandoned_reminder(user_id)
+    _clear_back_after_service_flags(user_id)
+    PROBLEM_USERS.pop(user_id, None)
+    _touch_user_activity(user_id, username)
+    if user_id in USER_PROFILES:
+        USER_PROFILES[user_id]["max_step"] = STEP_LABELS.get("catalog")
+    USER_STEP_RANK[user_id] = STEP_RANKS.get("catalog", 1)
+
+
 # === ГЛАВНОЕ МЕНЮ ===
 async def show_main_menu(event: Message | CallbackQuery, state: FSMContext):
-    await state.clear()
     user_id = event.from_user.id
     if user_id in BANNED_USERS:
         return
+    await state.clear()
     _reset_payment_step_tracking(user_id, leave_step=True)
     _clear_back_after_service_flags(user_id)
     _touch_user_activity(user_id, event.from_user.username)
@@ -2341,6 +2358,10 @@ async def _show_summary_step(event: Message | CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "order_back_step")
 async def cb_order_back_step(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     current_state = await state.get_state()
     data = await state.get_data()
@@ -2818,6 +2839,10 @@ def _build_promo_staff_keyboard(req_id: int) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "promo_code_entry")
 async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
 
@@ -2848,6 +2873,10 @@ async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "promo_back_to_order")
 async def cb_promo_back_to_order(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
     current_state = await state.get_state()
@@ -2861,9 +2890,19 @@ async def process_promo_code_input(message: Message, state: FSMContext):
     global PROMO_REQUEST_COUNTER
     user = message.from_user
     user_id = user.id
-    _touch_user_activity(user_id, user.username)
-
     raw_code = message.text.strip()
+    cmd_head = raw_code.split()[0].lower().split("@")[0] if raw_code else ""
+    if cmd_head in ("/start", "/restart"):
+        await _full_reset_user_session(user_id, state, user.username)
+        if cmd_head == "/restart":
+            try:
+                await message.reply("🔄 Бот перезапущен, состояние очищено.")
+            except Exception:
+                pass
+        await show_main_menu(message, state)
+        return
+
+    _touch_user_activity(user_id, user.username)
     words = raw_code.split()
     if len(words) != 1 or not _PROMO_WORD_RE.match(words[0]):
         await message.reply(
@@ -3174,6 +3213,10 @@ async def cb_client_reply_manager(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "client_close_dialog")
 async def cb_client_close_dialog(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer("🔒 Обращение закрыто")
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _close_dialog_state(user_id)
     for t in TICKETS.values():
@@ -3183,7 +3226,6 @@ async def cb_client_close_dialog(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.answer("🔒 Обращение закрыто")
     await show_main_menu(callback, state)
 
 
@@ -4222,12 +4264,17 @@ async def restore_abandoned_reminders(bot: Bot):
 # === ОБРАБОТЧИКИ КОМАНД ===
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
+    await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
     await show_main_menu(message, state)
 
 
 @router.message(Command("restart"))
 async def cmd_restart(message: Message, state: FSMContext):
-    await message.reply("🔄 Бот перезапущен, состояние очищено.")
+    await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
+    try:
+        await message.reply("🔄 Бот перезапущен, состояние очищено.")
+    except Exception:
+        pass
     await show_main_menu(message, state)
 
 
@@ -4296,6 +4343,10 @@ async def cmd_reputation_msg(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "back_home")
 async def back_home(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _cancel_abandoned_reminder(user_id)
@@ -4304,6 +4355,10 @@ async def back_home(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "reputation")
 async def show_reputation(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     _touch_user_activity(callback.from_user.id, callback.from_user.username)
     completed, in_progress, new_requests = get_reputation_stats()
     text = (
@@ -4325,6 +4380,10 @@ async def show_reputation(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "my_orders")
 async def show_my_orders(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
     orders = _get_client_paid_orders(user_id)
@@ -4357,6 +4416,10 @@ async def show_my_orders(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "contact_admin")
 async def contact_admin_info(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     _touch_user_activity(callback.from_user.id, callback.from_user.username)
     await state.set_state(SupportForm.reason)
     keyboard = InlineKeyboardMarkup(
@@ -4449,6 +4512,10 @@ async def process_support_photo(message: Message, state: FSMContext):
 
 @router.callback_query(SupportForm.photo, F.data == "skip_support_photo")
 async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     data = await state.get_data()
     user = callback.from_user
     _touch_user_activity(user.id, user.username)
@@ -4487,6 +4554,10 @@ async def skip_support_photo(callback: CallbackQuery, state: FSMContext):
 # === КАТАЛОГ И ОФОРМЛЕНИЕ ЗАКАЗА ===
 @router.callback_query(F.data == "start_order")
 async def process_start_order(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "catalog", callback.from_user.username)
@@ -4503,6 +4574,10 @@ async def process_start_order(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(OrderForm.service, F.data.startswith("srv_"))
 async def process_service(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     parts = callback.data.split("_")
     price = int(parts[-1])
     service_name = " ".join(parts[1:-1]).replace("_", " ")
@@ -4648,6 +4723,10 @@ async def process_special_task(message: Message, state: FSMContext):
 
 @router.callback_query(OrderForm.country, F.data.startswith("country_"))
 async def process_country(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     c_code = callback.data.split("_")[1]
     names = {
         "Russia": "Россия",
@@ -4759,11 +4838,19 @@ async def process_photo(message: Message, state: FSMContext):
 
 @router.callback_query(OrderForm.photos, F.data == "finish_photos")
 async def finish_photos(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     await _show_urgency_step(callback, state)
 
 
 @router.callback_query(OrderForm.urgency, F.data.startswith("urg_"))
 async def process_urgency(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     parts = callback.data.split("_")
     urg_price = int(parts[2])
     urg_map = {
@@ -4778,6 +4865,10 @@ async def process_urgency(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "submit_special_order")
 async def process_special_order_submit(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user = callback.from_user
     user_id = user.id
     data = await state.get_data()
@@ -4865,6 +4956,10 @@ async def process_special_order_submit(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "go_to_payment")
 async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _track_user_step(user_id, "payment", callback.from_user.username)
     data, country, curr_code, curr_symbol, total_price, service_name = (
@@ -4970,6 +5065,10 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_card_option")
 async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5097,6 +5196,10 @@ async def process_payment_help_manager(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5166,6 +5269,10 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user = callback.from_user
     _reset_payment_step_tracking(user.id, leave_step=True)
     _cancel_abandoned_reminder(user.id)
@@ -5238,6 +5345,10 @@ async def process_cryptobot_check(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "crypto_expert")
 async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5285,6 +5396,10 @@ async def process_crypto_expert(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_crypto_"))
 async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "payment_method", callback.from_user.username)
@@ -5378,6 +5493,10 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ask_for_receipt")
 async def ask_for_receipt(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     user_id = callback.from_user.id
     _reset_payment_step_tracking(user_id, leave_step=True)
     _track_user_step(user_id, "receipt", callback.from_user.username)
@@ -5616,7 +5735,18 @@ async def fallback_order_photos(message: Message):
 
 
 @router.message(OrderForm.promo_code)
-async def fallback_order_promo_code(message: Message):
+async def fallback_order_promo_code(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    cmd_head = raw.split()[0].lower().split("@")[0] if raw else ""
+    if cmd_head in ("/start", "/restart"):
+        await _full_reset_user_session(message.from_user.id, state, message.from_user.username)
+        if cmd_head == "/restart":
+            try:
+                await message.reply("🔄 Бот перезапущен, состояние очищено.")
+            except Exception:
+                pass
+        await show_main_menu(message, state)
+        return
     await message.reply(
         "❌ Неправильный промокод, АРЕНУ не обманешь)\n\n"
         "Введите промокод <b>одним словом</b> или нажмите кнопку возврата:",
