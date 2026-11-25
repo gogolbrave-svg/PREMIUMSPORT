@@ -2873,15 +2873,16 @@ async def cb_promo_code_entry(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "promo_back_to_order")
 async def cb_promo_back_to_order(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id in BANNED_USERS:
+        return
     try:
         await callback.answer()
     except Exception:
         pass
-    user_id = callback.from_user.id
     _touch_user_activity(user_id, callback.from_user.username)
-    current_state = await state.get_state()
-    if current_state == OrderForm.promo_code.state:
-        await state.set_state(OrderForm.payment)
+    _track_user_step(user_id, "payment", callback.from_user.username)
+    await state.set_state(OrderForm.payment)
     await process_go_to_payment(callback, state)
 
 
