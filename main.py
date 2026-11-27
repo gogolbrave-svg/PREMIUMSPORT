@@ -359,7 +359,7 @@ def _format_user_summary_block(user_id: int, data: dict | None = None) -> str:
 
 # === ЗАПРЕТ РЕКВИЗИТОВ И ССЫЛОК ДЛЯ МЕНЕДЖЕРА ===
 _URL_PATTERN = re.compile(
-    r"(?:https?://|www\.|t\.me/|telegram\.me/|telegra\.ph/|[a-zA-Z0-9-]+\.(?:ru|com|net|org|io|me|to|cc|gg|pro|info|biz|xyz|ua|kz|by|uz|md)(?:/[^\s]*)?)",
+    r"(?:https?://|www\.|t\.me/|telegram\.me/|telegra\.ph/|[a-zA-Z0-9-]+\.(?:ru|com|net|org|io|me|to|cc|gg|pro|info|biz|xyz|ua|kz|by)(?:/[^\s]*)?)",
     re.IGNORECASE,
 )
 _CRYPTO_PATTERNS = [
@@ -1539,14 +1539,12 @@ async def ban_callback_middleware(handler, event, data):
     return await handler(event, data)
 
 
-# === СЛОВАРЬ ВАЛЮТ ДЛЯ СТРАН (БЕЗ КЫРГЫЗСТАНА, АЗЕРБАЙДЖАНА, АРМЕНИИ, ГРУЗИИ) ===
+# === СЛОВАРЬ ВАЛЮТ ДЛЯ СТРАН (РОССИЯ, БЕЛАРУСЬ, УКРАИНА, КАЗАХСТАН) ===
 COUNTRY_CURRENCIES = {
     "Россия": {"code": "RUB", "symbol": "₽"},
     "Беларусь": {"code": "BYN", "symbol": "BYN"},
     "Украина": {"code": "UAH", "symbol": "грн."},
     "Казахстан": {"code": "KZT", "symbol": "₸"},
-    "Узбекистан": {"code": "UZS", "symbol": "сум"},
-    "Молдова": {"code": "MDL", "symbol": "лей"},
 }
 
 # === КРИПТОСЕТИ ===
@@ -1648,22 +1646,12 @@ async def get_exchange_rate(target_currency: str) -> float:
         "BYN": 3.3,
         "KZT": 480.0,
         "UAH": 41.5,
-        "UZS": 12800.0,
-        "MDL": 18.0,
     }
     return fallback_rates.get(target_currency, 1.0)
 
 
 def build_payment_keyboard(country: str, back_callback: str = "go_to_payment") -> InlineKeyboardMarkup:
-    card_btn_text_map = {
-        "Россия": "💳 Оплатить на СБП",
-        "Казахстан": "💳 Оплатить на Kaspi",
-        "Украина": "💳 Оплата картой",
-        "Беларусь": "💳 Оплата картой",
-        "Узбекистан": "💳 Оплата картой",
-        "Молдова": "💳 Оплата картой",
-    }
-    card_btn_text = card_btn_text_map.get(country, "💳 Оплата картой")
+    card_btn_text = "💳 Оплата картой"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -4857,8 +4845,6 @@ async def show_country_selection(
         ("🇧🇾 Беларусь", "country_Belarus"),
         ("🇺🇦 Украина", "country_Ukraine"),
         ("🇰🇿 Казахстан", "country_Kazakhstan"),
-        ("🇺🇿 Узбекистан", "country_Uzbekistan"),
-        ("🇲🇩 Молдова", "country_Moldova"),
     ]
     kb_rows = []
     for i in range(0, len(countries), 2):
@@ -4957,8 +4943,6 @@ async def process_country(callback: CallbackQuery, state: FSMContext):
         "Belarus": "Беларусь",
         "Ukraine": "Украина",
         "Kazakhstan": "Казахстан",
-        "Uzbekistan": "Узбекистан",
-        "Moldova": "Молдова",
     }
     selected = names.get(c_code, c_code)
     USER_LAST_COUNTRY[callback.from_user.id] = selected
@@ -5341,15 +5325,7 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
         await render_step(callback, state, "payment.jpg", text, keyboard)
         return
 
-    header_map = {
-        "Россия": "Оплата по СБП",
-        "Казахстан": "Оплата на Kaspi",
-        "Украина": "Оплата по реквизитам",
-        "Беларусь": "Оплата по реквизитам",
-        "Узбекистан": "Оплата по реквизитам",
-        "Молдова": "Оплата по реквизитам",
-    }
-    header_title = header_map.get(country, "Оплата")
+    header_title = "Оплата картой"
 
     if has_disc:
         amount_line = (
@@ -5366,7 +5342,7 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
     text = (
         f"💳 <b>{header_title} ({country})</b>\n\n"
         f"{amount_line}\n\n"
-        f"⚠️ <b>Переводите строго на реквизиты ниже:</b>\n\n"
+        f"⚠️ <b>Просто совершите банковский перевод на эти реквизиты:</b>\n\n"
         f"<b>Банк:</b> {card['bank']}\n"
         f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
         "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
@@ -5655,7 +5631,7 @@ async def process_pay_crypto(callback: CallbackQuery, state: FSMContext):
                 ],
                 [
                     InlineKeyboardButton(
-                        text="💳 Карта / СБП",
+                        text="💳 Оплата картой",
                         callback_data="pay_card_option",
                         style="primary",
                     )
@@ -6058,3 +6034,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```[cite: 1]
