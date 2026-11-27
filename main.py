@@ -5190,7 +5190,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
     disc_pct = int(data.get("promo_discount_pct", 0) or 0)
     has_disc = disc_pct > 0 and float(orig_price) > float(total_price or 0)
 
-    is_crypto_only = float(total_price) > 500
+    is_crypto_only = float(total_price) > 850
 
     if is_crypto_only:
         if has_disc:
@@ -5203,7 +5203,7 @@ async def process_go_to_payment(callback: CallbackQuery, state: FSMContext):
         payment_text = (
             "⏳ <b>Оплата заказа</b>\n"
             "Время на завершение: <b><u>20:00</u></b>\n\n"
-            "⚠️ <b>Внимание:</b> Для сумм свыше 500$ оплата"
+            "⚠️ <b>Внимание:</b> Для сумм свыше 850$ оплата"
             " картами недоступна. Доступен CryptoBot и криптовалюта.\n\n"
             f"{price_note}"
         )
