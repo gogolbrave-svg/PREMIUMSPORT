@@ -5351,7 +5351,7 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
         text = (
             f"💳 <b>{header_title} ({country})</b>\n\n"
             f"{amount_line}\n\n"
-            f"⚠️ <b>Просто совершите банковский перевод на эти реквизиты:</b>\n\n"
+            f"⚠️ <b>Совершите банковский перевод на эти реквизиты:</b>\n\n"
             f"<b>Банк:</b> {card['bank']}\n"
             f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
             "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
