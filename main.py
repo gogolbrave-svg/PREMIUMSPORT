@@ -1539,10 +1539,10 @@ async def ban_callback_middleware(handler, event, data):
     return await handler(event, data)
 
 
-# === СЛОВАРЬ ВАЛЮТ ДЛЯ СТРАН (ТОЛЬКО РОССИЯ, БЕЛАРУСЬ, УКРАИНА, КАЗАХСТАН) ===
+# === СЛОВАРЬ ВАЛЮТ ДЛЯ СТРАН (БЕЛАРУСЬ СЧИТАЕТСЯ В RUB) ===
 COUNTRY_CURRENCIES = {
     "Россия": {"code": "RUB", "symbol": "₽"},
-    "Беларусь": {"code": "BYN", "symbol": "BYN"},
+    "Беларусь": {"code": "RUB", "symbol": "₽"},
     "Украина": {"code": "UAH", "symbol": "грн."},
     "Казахстан": {"code": "KZT", "symbol": "₸"},
 }
@@ -1643,7 +1643,6 @@ async def get_exchange_rate(target_currency: str) -> float:
 
     fallback_rates = {
         "RUB": 95.0,
-        "BYN": 3.3,
         "KZT": 480.0,
         "UAH": 41.5,
     }
@@ -5338,14 +5337,25 @@ async def process_pay_card_option(callback: CallbackQuery, state: FSMContext):
             f" <i>({_format_num(total_price)}$)</i>"
         )
 
-    text = (
-        f"💳 <b>{header_title} ({country})</b>\n\n"
-        f"{amount_line}\n\n"
-        f"⚠️ <b>Просто совершите банковский перевод на эти реквизиты:</b>\n\n"
-        f"<b>Банк:</b> {card['bank']}\n"
-        f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
-        "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
-    )
+    if country == "Беларусь":
+        text = (
+            f"💳 <b>{header_title} ({country})</b>\n"
+            "• Валюта перевода: <b>Российские рубли (RUB / ₽)</b>\n"
+            f"{amount_line}\n\n"
+            "⚠️ <b>Сделайте банковский перевод на эти реквизиты (в российских рублях — RUB):</b>\n\n"
+            f"<b>Банк:</b> {card['bank']}\n"
+            f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
+            "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
+        )
+    else:
+        text = (
+            f"💳 <b>{header_title} ({country})</b>\n\n"
+            f"{amount_line}\n\n"
+            f"⚠️ <b>Просто совершите банковский перевод на эти реквизиты:</b>\n\n"
+            f"<b>Банк:</b> {card['bank']}\n"
+            f"<b>Реквизиты:</b> <code>{card['details']}</code>\n\n"
+            "💡 <i>После перевода нажмите кнопку ниже для отправки чека.</i>"
+        )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
